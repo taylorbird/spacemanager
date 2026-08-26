@@ -1,0 +1,10 @@
+.DS_Store
+/prototype/proto
+/spike/spike
+/.build/
+/build/
+xcuserdata/
+*.xcodeproj
+
+# Claude Code work state (uncomment to keep session state out of the repo)
+# .claude/work/
