@@ -5,6 +5,9 @@ let package = Package(
     name: "SpaceManager",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "SpaceManager", path: "Sources/SpaceManager")
+        .executableTarget(name: "SpaceManager", path: "Sources/SpaceManager"),
+        .testTarget(name: "SpaceManagerTests",
+                    dependencies: ["SpaceManager"],
+                    path: "Tests/SpaceManagerTests")
     ]
 )
