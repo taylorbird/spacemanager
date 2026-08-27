@@ -10,18 +10,23 @@ final class PreferencesController {
     init(settings: Settings) { self.settings = settings }
 
     func show() {
-        if window == nil {
+        let firstShow = window == nil
+        if firstShow {
             let w = NSWindow(contentRect: .zero,
                              styleMask: [.titled, .closable],
                              backing: .buffered, defer: false)
             w.title = "SpaceManager Preferences"
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: PreferencesView(settings: settings))
-            w.center()
             window = w
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        // Center only after ordering front: the window is created zero-size
+        // and SwiftUI sizes it during the first layout pass, so centering at
+        // creation centers a 0x0 point and the window grows off-center.
+        // Only on first show — a position the user chose later is kept.
+        if firstShow { window?.center() }
     }
 }
 
