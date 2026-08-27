@@ -449,6 +449,7 @@ struct SwitcherView: View {
             Text("No matching spaces")
                 .foregroundStyle(.secondary)
                 .padding(20)
+                .frame(maxWidth: .infinity, alignment: .center)
         } else {
             HStack(spacing: 0) {
                 ForEach(Array(filtered.enumerated()), id: \.element.id) { pos, item in
@@ -481,6 +482,10 @@ struct SwitcherView: View {
                                     + MenuMetrics.gap)
                 }
             }
+            // The header is wider than a filtered-down row; without this the
+            // row hugs the panel's leading edge. Applied after the overlay so
+            // the menu card stays anchored to the row, not the panel.
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
