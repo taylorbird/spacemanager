@@ -33,11 +33,12 @@ enum MenuMetrics {
     /// App cells are taller than text rows: centered icon with the name under it.
     static let appCellHeight: CGFloat = 72
 
-    /// Rename row, then (when apps exist) divider + label + one cell per app.
-    /// Still fully computable before layout — see the type comment.
+    /// Rename row, then (when apps exist) divider + label + one horizontal
+    /// strip of app cells. Still fully computable before layout — see the
+    /// type comment.
     static func cardHeight(apps: Int) -> CGFloat {
         let appsBlock: CGFloat = apps > 0
-            ? 1 + dividerPad * 2 + labelHeight + CGFloat(apps) * appCellHeight : 0
+            ? 1 + dividerPad * 2 + labelHeight + appCellHeight : 0
         return rowHeight + appsBlock + inset * 2
     }
 
@@ -551,31 +552,33 @@ struct SwitcherView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(height: MenuMetrics.labelHeight)
 
-                ForEach(Array(apps.enumerated()), id: \.element.id) { pos, app in
-                    let selected = model.menuSelection == pos + 1
-                    VStack(spacing: 4) {
-                        if let icon = app.icon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .frame(width: 40, height: 40)
-                        } else {
-                            Image(systemName: "app.dashed")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 40, height: 40)
+                HStack(spacing: 0) {
+                    ForEach(Array(apps.enumerated()), id: \.element.id) { pos, app in
+                        let selected = model.menuSelection == pos + 1
+                        VStack(spacing: 4) {
+                            if let icon = app.icon {
+                                Image(nsImage: icon)
+                                    .resizable()
+                                    .frame(width: 40, height: 40)
+                            } else {
+                                Image(systemName: "app.dashed")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 40, height: 40)
+                            }
+                            Text(app.label)
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
-                        Text(app.label)
-                            .font(.system(size: 12))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: MenuMetrics.appCellHeight)
+                        .background(RoundedRectangle(cornerRadius: 7)
+                            .fill(selected ? accent.opacity(0.28) : .clear))
+                        .contentShape(Rectangle())
+                        .onTapGesture { onMenuPick(.launch(app)) }
+                        .onHover { if $0 { model.menuSelection = pos + 1 } }
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: MenuMetrics.appCellHeight)
-                    .background(RoundedRectangle(cornerRadius: 7)
-                        .fill(selected ? accent.opacity(0.28) : .clear))
-                    .contentShape(Rectangle())
-                    .onTapGesture { onMenuPick(.launch(app)) }
-                    .onHover { if $0 { model.menuSelection = pos + 1 } }
                 }
             }
         }
