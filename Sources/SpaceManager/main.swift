@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var quickLauncher: QuickLauncher!
     var editController: SpaceEditController!
     var actionsEditor: ActionsEditorController!
+    var preferences: PreferencesController!
     var setupGuide: SetupGuideController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -71,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduler = ArrivalScheduler(settings: settings, store: actionsStore, runner: runner)
         editController = SpaceEditController(metadata: metadata)
         actionsEditor = ActionsEditorController(viewModel: viewModel, store: actionsStore, settings: settings)
+        preferences = PreferencesController(settings: settings)
         setupGuide = SetupGuideController(status: setupStatus, viewModel: viewModel)
 
         statusBar = StatusBarController(
@@ -83,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 replayHUD: { [weak self] in self?.showHUDForCurrent() },
                 editSpace: { [weak self] item in self?.editController.edit(item: item) },
                 editActions: { [weak self] in self?.actionsEditor.show() },
+                openPreferences: { [weak self] in self?.preferences.show() },
                 openSetup: { [weak self] in self?.setupGuide.show() },
                 runAction: { [weak self] action in self?.runner.runManually(action) }
             )

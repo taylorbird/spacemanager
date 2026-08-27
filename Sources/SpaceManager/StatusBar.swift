@@ -9,6 +9,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         var replayHUD: () -> Void
         var editSpace: (SpaceItem) -> Void
         var editActions: () -> Void
+        var openPreferences: () -> Void
         var openSetup: () -> Void
         var runAction: (SpaceAction) -> Void
     }
@@ -96,6 +97,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let editActions = NSMenuItem(title: "Edit Actions…", action: #selector(editActions(_:)), keyEquivalent: "")
         editActions.target = self
         menu.addItem(editActions)
+
+        let prefs = NSMenuItem(title: "Preferences…", action: #selector(openPreferences(_:)),
+                               keyEquivalent: ",")
+        prefs.target = self
+        menu.addItem(prefs)
 
         menu.addItem(.separator())
 
@@ -191,6 +197,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func replay() { handlers.replayHUD() }
     @objc private func openSetup() { handlers.openSetup() }
     @objc private func editActions(_ sender: NSMenuItem) { handlers.editActions() }
+    @objc private func openPreferences(_ sender: NSMenuItem) { handlers.openPreferences() }
 
     @objc private func renameCurrent() {
         if let current = viewModel.current { handlers.editSpace(current) }
