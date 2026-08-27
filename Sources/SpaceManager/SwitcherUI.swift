@@ -22,7 +22,7 @@ enum TileMetrics {
 /// is known before layout — that's what lets it be offset clear of the panel
 /// without measuring anything, and it never resizes with its content.
 enum MenuMetrics {
-    static let width: CGFloat = 300
+    static let width: CGFloat = 220
     static let rowHeight: CGFloat = 40
     static let inset: CGFloat = 7
     /// Breathing room between the panel's bottom edge and the card's top.
@@ -31,7 +31,7 @@ enum MenuMetrics {
     static let labelHeight: CGFloat = 18
     static let dividerPad: CGFloat = 5
     /// App cells are taller than text rows: centered icon with the name under it.
-    static let appCellHeight: CGFloat = 64
+    static let appCellHeight: CGFloat = 72
 
     /// Rename row, then (when apps exist) divider + label + one cell per app.
     /// Still fully computable before layout — see the type comment.
@@ -557,12 +557,12 @@ struct SwitcherView: View {
                         if let icon = app.icon {
                             Image(nsImage: icon)
                                 .resizable()
-                                .frame(width: 32, height: 32)
+                                .frame(width: 40, height: 40)
                         } else {
                             Image(systemName: "app.dashed")
-                                .font(.system(size: 18))
+                                .font(.system(size: 22))
                                 .foregroundStyle(.secondary)
-                                .frame(width: 32, height: 32)
+                                .frame(width: 40, height: 40)
                         }
                         Text(app.label)
                             .font(.system(size: 12))
