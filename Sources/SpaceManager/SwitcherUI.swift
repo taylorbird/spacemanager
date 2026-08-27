@@ -29,14 +29,13 @@ enum MenuMetrics {
     static let gap: CGFloat = 12
 
     static let labelHeight: CGFloat = 18
-    static let stripHeight: CGFloat = 48
     static let dividerPad: CGFloat = 5
 
-    /// Rename row, then (when apps exist) divider + label + icon strip.
+    /// Rename row, then (when apps exist) divider + label + one row per app.
     /// Still fully computable before layout — see the type comment.
-    static func cardHeight(hasApps: Bool) -> CGFloat {
-        let appsBlock: CGFloat = hasApps
-            ? 1 + dividerPad * 2 + labelHeight + stripHeight : 0
+    static func cardHeight(apps: Int) -> CGFloat {
+        let appsBlock: CGFloat = apps > 0
+            ? 1 + dividerPad * 2 + labelHeight + CGFloat(apps) * rowHeight : 0
         return rowHeight + appsBlock + inset * 2
     }
 
@@ -486,7 +485,7 @@ struct SwitcherView: View {
                     menuCard
                         .offset(x: MenuMetrics.xOffset(pos: model.highlight,
                                                        tiles: model.filtered.count),
-                                y: MenuMetrics.cardHeight(hasApps: model.menuItems.count > 1)
+                                y: MenuMetrics.cardHeight(apps: model.menuItems.count - 1)
                                     + MenuMetrics.gap)
                 }
             }
@@ -519,8 +518,6 @@ struct SwitcherView: View {
             if case .launch(let app) = $0 { return app }
             return nil
         }
-        let selectedApp = model.menuSelection >= 1 && model.menuSelection <= apps.count
-            ? apps[model.menuSelection - 1] : nil
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "pencil")
@@ -545,40 +542,39 @@ struct SwitcherView: View {
                     .padding(.vertical, MenuMetrics.dividerPad)
                     .padding(.horizontal, 4)
 
-                Text(selectedApp.map { "Open in \($0.label)" } ?? "Open in")
+                Text("Open on display")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, 11)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(height: MenuMetrics.labelHeight)
 
-                HStack(spacing: 12) {
-                    ForEach(Array(apps.enumerated()), id: \.element.id) { pos, app in
-                        let selected = model.menuSelection == pos + 1
-                        Group {
-                            if let icon = app.icon {
-                                Image(nsImage: icon)
-                                    .resizable()
-                                    .frame(width: 32, height: 32)
-                            } else {
-                                Image(systemName: "app.dashed")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 32, height: 32)
-                            }
+                ForEach(Array(apps.enumerated()), id: \.element.id) { pos, app in
+                    let selected = model.menuSelection == pos + 1
+                    HStack(spacing: 10) {
+                        if let icon = app.icon {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .frame(width: 24, height: 24)
+                        } else {
+                            Image(systemName: "app.dashed")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24, height: 24)
                         }
-                        .padding(6)
-                        .background(RoundedRectangle(cornerRadius: 7)
-                            .fill(selected ? accent.opacity(0.28) : .clear))
-                        .overlay(RoundedRectangle(cornerRadius: 7)
-                            .strokeBorder(selected ? accent.opacity(0.8) : .clear))
-                        .contentShape(Rectangle())
-                        .onTapGesture { onMenuPick(.launch(app)) }
-                        .onHover { if $0 { model.menuSelection = pos + 1 } }
-                        .help(app.label)
+                        Text(app.label)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 11)
+                    .frame(height: MenuMetrics.rowHeight)
+                    .background(RoundedRectangle(cornerRadius: 7)
+                        .fill(selected ? accent.opacity(0.28) : .clear))
+                    .contentShape(Rectangle())
+                    .onTapGesture { onMenuPick(.launch(app)) }
+                    .onHover { if $0 { model.menuSelection = pos + 1 } }
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: MenuMetrics.stripHeight)
             }
         }
         .font(.system(size: 15))
