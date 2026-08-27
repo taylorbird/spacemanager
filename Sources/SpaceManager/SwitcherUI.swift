@@ -12,6 +12,9 @@ enum TileMetrics {
     /// Divider (1pt) plus its 8.5pt padding either side.
     static let gap: CGFloat = 18
     static let rowInset: CGFloat = 16
+    /// Fixed so the menu-card offset can account for it — the footer sits
+    /// between the tiles row and the panel's bottom edge.
+    static let footerHeight: CGFloat = 18
 
     static func leadingOffset(pos: Int) -> CGFloat {
         rowInset + CGFloat(pos) * (width + gap)
@@ -215,6 +218,8 @@ final class SwitcherController {
     private let model: SwitcherModel
     private let viewModel: SpacesViewModel
     private let launcher: QuickLauncher
+    /// ⌘, from inside the switcher; wired by the app delegate.
+    var onPreferences: (() -> Void)?
 
     private let stageSize = NSSize(width: 1200, height: 540)
 
@@ -360,9 +365,16 @@ final class SwitcherController {
               let c = chars.first else { return true }
 
         // ⌘ + letter quick-launches that app onto the highlighted space —
-        // works whether or not the tile menu is open.
+        // works whether or not the tile menu is open. ⌘, is the standard
+        // Preferences shortcut; it closes the switcher first so the window
+        // isn't fighting a nonactivating panel for key status.
         if event.modifierFlags.contains(.command) {
-            if let app = model.quickLaunchApp(matching: c) { quickLaunchHighlighted(app) }
+            if c == "," {
+                close()
+                onPreferences?()
+            } else if let app = model.quickLaunchApp(matching: c) {
+                quickLaunchHighlighted(app)
+            }
             return true
         }
 
@@ -403,6 +415,7 @@ struct SwitcherView: View {
                 Divider().opacity(0.5)
                 editBar
             }
+            footer
         }
         .fixedSize()
         .background(
@@ -422,6 +435,17 @@ struct SwitcherView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { nameFocused = true }
             }
         }
+    }
+
+    private var footer: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Text("⌘, preferences")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: TileMetrics.footerHeight)
     }
 
     private var header: some View {
@@ -477,18 +501,18 @@ struct SwitcherView: View {
             }
             .padding(TileMetrics.rowInset)
             // Overlay, not a VStack row: overlays don't feed back into their
-            // parent's size, so opening the menu can't resize the panel. The
-            // tiles row is the last thing in the panel, so its bottom edge IS
-            // the panel's bottom edge — anchoring here means the card floats
-            // clear of the panel without needing to know where the panel got
-            // centered or how wide it ended up.
+            // parent's size, so opening the menu can't resize the panel.
+            // Anchored to the tiles row; only the fixed-height footer sits
+            // between this row's bottom edge and the panel's, so adding
+            // footerHeight floats the card clear of the panel without
+            // measuring anything.
             .overlay(alignment: .bottomLeading) {
                 if model.menuOpen {
                     menuCard
                         .offset(x: MenuMetrics.xOffset(pos: model.highlight,
                                                        tiles: model.filtered.count),
                                 y: MenuMetrics.cardHeight(apps: model.menuItems.count - 1)
-                                    + MenuMetrics.gap)
+                                    + MenuMetrics.gap + TileMetrics.footerHeight)
                 }
             }
             // The header is wider than a filtered-down row; without this the

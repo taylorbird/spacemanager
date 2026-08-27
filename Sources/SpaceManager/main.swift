@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editController = SpaceEditController(metadata: metadata)
         actionsEditor = ActionsEditorController(viewModel: viewModel, store: actionsStore, settings: settings)
         preferences = PreferencesController(settings: settings)
+        switcher.onPreferences = { [weak self] in self?.preferences.show() }
         setupGuide = SetupGuideController(status: setupStatus, viewModel: viewModel)
 
         statusBar = StatusBarController(
