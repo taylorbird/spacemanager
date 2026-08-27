@@ -48,7 +48,7 @@ final class Settings: ObservableObject {
     /// How long you must stay on a space before on-arrive actions fire.
     @Published var settleSeconds: Double { didSet { save() } }
     /// Apps offered in the switcher's footer, launchable onto the highlighted
-    /// space. Seeded; no editor yet.
+    /// space. Seeded; edited in Preferences.
     @Published var quickLaunch: [QuickLaunchApp] { didSet { save() } }
     /// Master switches. Off = quick-launch behaves exactly as before this
     /// feature existed (⌘N / plain cold launch, no window moving) — the off
