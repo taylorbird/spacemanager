@@ -46,7 +46,56 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func updateTitle() {
-        statusItem.button?.title = viewModel.current?.menuLabel ?? "Spaces"
+        guard let button = statusItem.button else { return }
+        let current = viewModel.current
+        button.image = spaceIcon(number: current?.number)
+        button.imagePosition = .imageLeading
+        // NSButton exposes no image/title spacing; a leading space is the gap.
+        button.title = " " + (current?.menuLabel ?? "Spaces")
+    }
+
+    // MARK: Status item icon
+
+    private static let displaySymbol = NSImage.SymbolConfiguration(pointSize: 15.5, weight: .medium)
+
+    // Composition runs symbol rasterization plus string layout, and updateTitle
+    // fires on every view-model change; key 0 is the no-current-space glyph.
+    private var iconCache: [Int: NSImage] = [:]
+
+    /// Monitor glyph with the current space's number inside its screen area.
+    private func spaceIcon(number: Int?) -> NSImage? {
+        let key = number ?? 0
+        if let cached = iconCache[key] { return cached }
+        guard let symbol = NSImage(systemSymbolName: "display", accessibilityDescription: "Current space")?
+            .withSymbolConfiguration(Self.displaySymbol) else { return nil }
+
+        let icon = NSImage(size: symbol.size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            guard let number else { return true }
+
+            let digits = String(number) as NSString
+            let points: CGFloat = digits.length > 1 ? 7.5 : 9
+            let base = NSFont.systemFont(ofSize: points, weight: .bold)
+            let font = base.fontDescriptor.withDesign(.rounded)
+                .flatMap { NSFont(descriptor: $0, size: points) } ?? base
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+            let measured = digits.size(withAttributes: attrs)
+
+            // The symbol's screen sits above its stand: at 15.5pt the interior
+            // measures 16x10.7 in a 23x19 glyph, centered at 0.58 of the height.
+            // Center on cap height, not the line box — digits have no descender.
+            let center = rect.minY + rect.height * 0.58
+            digits.draw(at: NSPoint(x: rect.midX - measured.width / 2,
+                                    y: center - font.capHeight / 2 + font.descender),
+                        withAttributes: attrs)
+            return true
+        }
+        // Template rendering is what recolors the digits along with the glyph for
+        // dark mode and the open-menu highlight; the symbol's screen interior is
+        // empty, so black digits drawn there join the template shape.
+        icon.isTemplate = true
+        iconCache[key] = icon
+        return icon
     }
 
     // Rebuild the menu each time it opens: fresh space list, checkmarks,
