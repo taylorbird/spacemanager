@@ -42,12 +42,19 @@ enum PlacementGeometry {
         }
     }
 
-    /// Main display bounds minus the menu bar, in CG coordinates.
+    /// Main display bounds minus menu bar and Dock, in CG coordinates.
+    /// NSScreen's visibleFrame supplies the insets as scalar distances from
+    /// the screen edges — still no coordinate flip, since only widths and
+    /// edge offsets cross between the two spaces, never a y origin.
     static func mainVisibleRect() -> CGRect {
         let display = CGDisplayBounds(CGMainDisplayID())
-        let menuBar = NSScreen.main.map { $0.frame.maxY - $0.visibleFrame.maxY } ?? 25
-        return CGRect(x: display.minX, y: display.minY + menuBar,
-                      width: display.width, height: display.height - menuBar)
+        guard let screen = NSScreen.main else { return display }
+        let top = screen.frame.maxY - screen.visibleFrame.maxY
+        let bottom = screen.visibleFrame.minY - screen.frame.minY
+        let left = screen.visibleFrame.minX - screen.frame.minX
+        return CGRect(x: display.minX + left, y: display.minY + top,
+                      width: screen.visibleFrame.width,
+                      height: display.height - top - bottom)
     }
 }
 
@@ -64,16 +71,22 @@ final class WindowPlacer {
     private var deadline: Date = .distantPast
     private var active = false
 
-    func placeNextWindow(pid: pid_t, frame: CGRect) {
-        guard AXIsProcessTrusted(), pid > 0 else { return }
+    /// `wait` covers slower window sources: profile-forwarded Chrome launches
+    /// load the profile before showing a window and can blow the default.
+    func placeNextWindow(pid: pid_t, frame: CGRect, wait: TimeInterval = 3.0) {
+        guard AXIsProcessTrusted(), pid > 0 else {
+            NSLog("WindowPlacer: not armed (AX trusted=%d pid=%d)", AXIsProcessTrusted() ? 1 : 0, pid)
+            return
+        }
         cancel()
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 1.0) // default 6s; these are sync IPC
         appElement = app
         before = Self.windows(of: app)
         target = frame
-        deadline = Date().addingTimeInterval(3.0)
+        deadline = Date().addingTimeInterval(wait)
         active = true
+        NSLog("WindowPlacer: armed pid=%d snapshot=%d wait=%.1fs", pid, before.count, wait)
 
         // Observer for low latency; the poll below is the reliability layer
         // (macOS 26 AX notifications can silently die — Phoenix #366).
@@ -98,7 +111,7 @@ final class WindowPlacer {
     /// exists. Registration succeeds well before the AX tree is readable
     /// (~0.7s vs ~2.3s measured on a cold launch), so hooking didLaunch
     /// reliably catches the first window.
-    func armForColdLaunch(bundleID: String, frame: CGRect) {
+    func armForColdLaunch(bundleID: String, frame: CGRect, wait: TimeInterval = 3.0) {
         // The token only exists after addObserver returns, so both the
         // observer body and the timeout below reach it through a box —
         // a captured `var` would be a mutated-after-capture race.
@@ -111,7 +124,7 @@ final class WindowPlacer {
                     as? NSRunningApplication,
                   launched.bundleIdentifier == bundleID else { return }
             box.remove()
-            self?.placeNextWindow(pid: launched.processIdentifier, frame: frame)
+            self?.placeNextWindow(pid: launched.processIdentifier, frame: frame, wait: wait)
         }
         // Don't wait forever if the launch fails.
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
@@ -131,7 +144,11 @@ final class WindowPlacer {
 
     private func check() {
         guard active, let app = appElement else { return }
-        guard Date() < deadline else { cancel(); return }
+        guard Date() < deadline else {
+            NSLog("WindowPlacer: timed out, no new window detected")
+            cancel()
+            return
+        }
         let now = Self.windows(of: app)
         // Identity diff vs the pre-trigger snapshot. AXUIElement is a CFType:
         // CFEqual-based contains(). Ghostty tabs show as extra "windows" in
@@ -141,6 +158,7 @@ final class WindowPlacer {
         active = false
         let frame = target
         cancel()
+        NSLog("WindowPlacer: new window detected, applying %@", String(describing: frame))
         queue.async { Self.apply(frame: frame, to: fresh, appElement: app) }
     }
 

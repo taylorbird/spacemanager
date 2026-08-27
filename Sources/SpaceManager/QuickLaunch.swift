@@ -123,17 +123,24 @@ final class QuickLauncher {
         // window. Global toggle off, or no placement on the entry, or an
         // uncaptured custom rect → no arming, windows land wherever the app
         // puts them (pre-feature behavior).
+        let profileDir: String? = {
+            guard settings.chromeProfilesEnabled, let dir = app.chromeProfile,
+                  ChromeProfiles.exists(dir) else { return nil }
+            return dir
+        }()
         if settings.windowPlacementEnabled, let spec = app.placement,
            let rect = PlacementGeometry.targetRect(
                for: spec, visible: PlacementGeometry.mainVisibleRect()) {
+            // Profile-forwarded launches show their window only after the
+            // profile loads — give detection more room than the ⌘N path.
+            let wait: TimeInterval = profileDir != nil ? 8.0 : 3.0
             if let running = app.runningInstance, !running.isTerminated {
-                placer.placeNextWindow(pid: running.processIdentifier, frame: rect)
+                placer.placeNextWindow(pid: running.processIdentifier, frame: rect, wait: wait)
             } else {
-                placer.armForColdLaunch(bundleID: app.bundleID, frame: rect)
+                placer.armForColdLaunch(bundleID: app.bundleID, frame: rect, wait: wait)
             }
         }
-        if settings.chromeProfilesEnabled,
-           let dir = app.chromeProfile, ChromeProfiles.exists(dir) {
+        if let dir = profileDir {
             launchWithChromeProfile(dir, app: app)
             return
         }
