@@ -28,8 +28,16 @@ enum MenuMetrics {
     /// Breathing room between the panel's bottom edge and the card's top.
     static let gap: CGFloat = 12
 
-    static func height(rows: Int) -> CGFloat {
-        CGFloat(rows) * rowHeight + inset * 2
+    static let labelHeight: CGFloat = 18
+    static let stripHeight: CGFloat = 48
+    static let dividerPad: CGFloat = 5
+
+    /// Rename row, then (when apps exist) divider + label + icon strip.
+    /// Still fully computable before layout — see the type comment.
+    static func cardHeight(hasApps: Bool) -> CGFloat {
+        let appsBlock: CGFloat = hasApps
+            ? 1 + dividerPad * 2 + labelHeight + stripHeight : 0
+        return rowHeight + appsBlock + inset * 2
     }
 
     /// Card centered under the highlighted tile, clamped to the row's edges
@@ -58,20 +66,6 @@ enum TileMenuItem: Identifiable {
         }
     }
 
-    var label: String {
-        switch self {
-        case .rename: return "Rename…"
-        // No "Open " prefix — the app icon carries that meaning now.
-        case .launch(let app): return app.label
-        }
-    }
-
-    var hint: String? {
-        switch self {
-        case .rename: return nil
-        case .launch(let app): return app.shortcut
-        }
-    }
 }
 
 final class SwitcherModel: ObservableObject {
@@ -492,7 +486,7 @@ struct SwitcherView: View {
                     menuCard
                         .offset(x: MenuMetrics.xOffset(pos: model.highlight,
                                                        tiles: model.filtered.count),
-                                y: MenuMetrics.height(rows: model.menuItems.count)
+                                y: MenuMetrics.cardHeight(hasApps: model.menuItems.count > 1)
                                     + MenuMetrics.gap)
                 }
             }
@@ -514,32 +508,77 @@ struct SwitcherView: View {
             .padding(.horizontal, 8.5) // keeps the ~18pt tile gap
     }
 
-    /// Floating satellite card for the highlighted tile: thinner material than
-    /// the panel so it reads as a lighter companion sitting underneath it.
-    /// Fixed width — long labels truncate rather than widening the card.
+    /// Floating satellite card for the highlighted tile: a Rename row, then
+    /// the quick-launch apps as a centered icon strip under an "Open in"
+    /// label. The label names the selected app — the icons carry no text, so
+    /// keyboard navigation needs the name somewhere. Selection indices are
+    /// unchanged: 0 is Rename, 1… are the apps, Down/Up walks them all.
     private var menuCard: some View {
         let accent = model.menuFor?.accentColor ?? .secondary
+        let apps: [QuickLaunchApp] = model.menuItems.compactMap {
+            if case .launch(let app) = $0 { return app }
+            return nil
+        }
+        let selectedApp = model.menuSelection >= 1 && model.menuSelection <= apps.count
+            ? apps[model.menuSelection - 1] : nil
         return VStack(spacing: 0) {
-            ForEach(Array(model.menuItems.enumerated()), id: \.element.id) { pos, item in
-                let selected = pos == model.menuSelection
-                HStack(spacing: 10) {
-                    menuIcon(item)
-                    Text(item.label)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 10)
-                    if let hint = item.hint {
-                        Text(hint)
-                            .foregroundStyle(selected ? .secondary : .tertiary)
+            HStack(spacing: 10) {
+                Image(systemName: "pencil")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                Text("Rename…")
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 11)
+            .frame(height: MenuMetrics.rowHeight)
+            .background(RoundedRectangle(cornerRadius: 7)
+                .fill(model.menuSelection == 0 ? accent.opacity(0.28) : .clear))
+            .contentShape(Rectangle())
+            .onTapGesture { onMenuPick(.rename) }
+            .onHover { if $0 { model.menuSelection = 0 } }
+
+            if !apps.isEmpty {
+                Rectangle()
+                    .fill(Color.white.opacity(0.10))
+                    .frame(height: 1)
+                    .padding(.vertical, MenuMetrics.dividerPad)
+                    .padding(.horizontal, 4)
+
+                Text(selectedApp.map { "Open in \($0.label)" } ?? "Open in")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(height: MenuMetrics.labelHeight)
+
+                HStack(spacing: 12) {
+                    ForEach(Array(apps.enumerated()), id: \.element.id) { pos, app in
+                        let selected = model.menuSelection == pos + 1
+                        Group {
+                            if let icon = app.icon {
+                                Image(nsImage: icon)
+                                    .resizable()
+                                    .frame(width: 32, height: 32)
+                            } else {
+                                Image(systemName: "app.dashed")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 32, height: 32)
+                            }
+                        }
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 7)
+                            .fill(selected ? accent.opacity(0.28) : .clear))
+                        .overlay(RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(selected ? accent.opacity(0.8) : .clear))
+                        .contentShape(Rectangle())
+                        .onTapGesture { onMenuPick(.launch(app)) }
+                        .onHover { if $0 { model.menuSelection = pos + 1 } }
+                        .help(app.label)
                     }
                 }
-                .padding(.horizontal, 11)
-                .frame(height: MenuMetrics.rowHeight)
-                .background(RoundedRectangle(cornerRadius: 7)
-                    .fill(selected ? accent.opacity(0.28) : .clear))
-                .contentShape(Rectangle())
-                .onTapGesture { onMenuPick(item) }
-                .onHover { if $0 { model.menuSelection = pos } }
+                .frame(maxWidth: .infinity)
+                .frame(height: MenuMetrics.stripHeight)
             }
         }
         .font(.system(size: 15))
@@ -552,30 +591,6 @@ struct SwitcherView: View {
                     .strokeBorder(Color.white.opacity(0.12)))
                 .shadow(color: .black.opacity(0.4), radius: 14, y: 5)
         )
-    }
-
-    /// Real app icon for launch rows, a symbol for Rename, both boxed to the
-    /// same size so every row has the same anatomy.
-    @ViewBuilder
-    private func menuIcon(_ item: TileMenuItem) -> some View {
-        switch item {
-        case .rename:
-            Image(systemName: "pencil")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-                .frame(width: 24, height: 24)
-        case .launch(let app):
-            if let icon = app.icon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 24, height: 24)
-            } else {
-                Image(systemName: "app.dashed")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-            }
-        }
     }
 
     private var editBar: some View {
