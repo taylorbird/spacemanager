@@ -30,7 +30,9 @@ struct QuickLaunchApp: Codable, Identifiable, Equatable {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
     }
 
-    var shortcut: String { "⌘\(keyEquivalent.uppercased())" }
+    /// nil when no key is assigned — entries without shortcuts are
+    /// menu/click-only, and render no hint.
+    var shortcut: String? { keyEquivalent.isEmpty ? nil : "⌘\(keyEquivalent.uppercased())" }
 
     /// Cached: menu rows re-render on every hover and keystroke, and this is a
     /// Launch Services hit. Main-thread only, like all the UI that reads it.
@@ -51,21 +53,13 @@ struct QuickLaunchApp: Codable, Identifiable, Equatable {
         NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
     }
 
-    /// Fills blank key equivalents from the label's first unclaimed letter, so
-    /// entries added later get a shortcut without one having to be typed.
+    /// Lowercases assigned keys. Blank stays blank — a shortcut is opt-in
+    /// (assigned in Preferences), never auto-derived from the label: ⌘ +
+    /// a guessed letter collides with system muscle memory (⌘C is copy).
     static func normalized(_ apps: [QuickLaunchApp]) -> [QuickLaunchApp] {
-        var taken = Set(apps.map { $0.keyEquivalent.lowercased() }.filter { !$0.isEmpty })
-        return apps.map { app in
+        apps.map { app in
             var copy = app
-            guard app.keyEquivalent.isEmpty else {
-                copy.keyEquivalent = app.keyEquivalent.lowercased()
-                return copy
-            }
-            for c in app.label.lowercased() where c.isLetter && !taken.contains(String(c)) {
-                taken.insert(String(c))
-                copy.keyEquivalent = String(c)
-                break
-            }
+            copy.keyEquivalent = app.keyEquivalent.lowercased()
             return copy
         }
     }
