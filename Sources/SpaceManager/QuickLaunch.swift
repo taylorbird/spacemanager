@@ -79,6 +79,7 @@ final class QuickLauncher {
     private let viewModel: SpacesViewModel
     private var pending: (uuid: String, app: QuickLaunchApp)?
     private var timeout: DispatchWorkItem?
+    private let placer = WindowPlacer()
 
     init(settings: Settings, viewModel: SpacesViewModel) {
         self.settings = settings
@@ -118,6 +119,19 @@ final class QuickLauncher {
     /// exists — every other case falls through to the pre-existing behavior,
     /// which is what "turned off" means.
     private func open(_ app: QuickLaunchApp) {
+        // Arm placement first so the AX snapshot/observer predate the new
+        // window. Global toggle off, or no placement on the entry, or an
+        // uncaptured custom rect → no arming, windows land wherever the app
+        // puts them (pre-feature behavior).
+        if settings.windowPlacementEnabled, let spec = app.placement,
+           let rect = PlacementGeometry.targetRect(
+               for: spec, visible: PlacementGeometry.mainVisibleRect()) {
+            if let running = app.runningInstance, !running.isTerminated {
+                placer.placeNextWindow(pid: running.processIdentifier, frame: rect)
+            } else {
+                placer.armForColdLaunch(bundleID: app.bundleID, frame: rect)
+            }
+        }
         if settings.chromeProfilesEnabled,
            let dir = app.chromeProfile, ChromeProfiles.exists(dir) {
             launchWithChromeProfile(dir, app: app)
