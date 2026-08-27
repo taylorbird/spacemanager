@@ -111,9 +111,18 @@ final class QuickLauncher {
         }
     }
 
-    /// "Open X on this space" has to mean a NEW window here, so the two cases
-    /// need different mechanisms.
+    /// "Open X on this space" has to mean a NEW window here. Three mechanisms:
+    /// profile-targeted Chrome launch (works warm AND cold), ⌘N synthesis
+    /// (warm), plain cold launch. The profile path only engages when the
+    /// global toggle is on, the entry has a profile, and that profile still
+    /// exists — every other case falls through to the pre-existing behavior,
+    /// which is what "turned off" means.
     private func open(_ app: QuickLaunchApp) {
+        if settings.chromeProfilesEnabled,
+           let dir = app.chromeProfile, ChromeProfiles.exists(dir) {
+            launchWithChromeProfile(dir, app: app)
+            return
+        }
         // Already running: openApplication would only activate it — no window —
         // and activating an app whose windows all live on other spaces pulls us
         // straight back off the space we just landed on. Ask the app itself for
@@ -127,6 +136,33 @@ final class QuickLauncher {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in }
+    }
+
+    /// Chrome honors --profile-directory warm or cold: a cold launch reads it
+    /// as the startup profile; against a running Chrome the spawned process
+    /// forwards its command line over Chrome's singleton socket and exits
+    /// (no second instance survives). createsNewApplicationInstance = true is
+    /// required — without it, LaunchServices just activates the running app
+    /// and the arguments are silently dropped. NOTE: OpenConfiguration
+    /// .arguments is ignored if this app is ever sandboxed — this whole path
+    /// depends on staying un-sandboxed (we are: Developer ID only).
+    private func launchWithChromeProfile(_ directory: String, app: QuickLaunchApp) {
+        guard let url = app.url else { return }
+        let wasRunning = app.runningInstance
+        let config = NSWorkspace.OpenConfiguration()
+        config.arguments = ["--profile-directory=\(directory)",
+                            "--ignore-profile-directory-if-not-exists"]
+        config.createsNewApplicationInstance = true
+        config.activates = false
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { launched, _ in
+            // Focus the REAL instance, not the exiting messenger process.
+            // Empty options is load-bearing (see newWindow below): it brings
+            // only main+key windows, so other spaces' windows stay put.
+            let target = wasRunning ?? launched
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                target?.activate(options: [])
+            }
+        }
     }
 
     /// ⌘ + key delivered straight to the app's own process. Same CGEvent style
