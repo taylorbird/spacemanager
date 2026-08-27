@@ -50,6 +50,11 @@ final class Settings: ObservableObject {
     /// Apps offered in the switcher's footer, launchable onto the highlighted
     /// space. Seeded; no editor yet.
     @Published var quickLaunch: [QuickLaunchApp] { didSet { save() } }
+    /// Master switches. Off = quick-launch behaves exactly as before this
+    /// feature existed (⌘N / plain cold launch, no window moving) — the off
+    /// state is the escape hatch for machines where AX side effects matter.
+    @Published var chromeProfilesEnabled: Bool { didSet { save() } }
+    @Published var windowPlacementEnabled: Bool { didSet { save() } }
 
     private let d = UserDefaults.standard
 
@@ -69,6 +74,10 @@ final class Settings: ObservableObject {
         } else {
             quickLaunch = QuickLaunchApp.defaults
         }
+        chromeProfilesEnabled = d.object(forKey: "quickLaunchProfilesEnabled") == nil
+            ? true : d.bool(forKey: "quickLaunchProfilesEnabled")
+        windowPlacementEnabled = d.object(forKey: "quickLaunchPlacementEnabled") == nil
+            ? true : d.bool(forKey: "quickLaunchPlacementEnabled")
     }
 
     private func save() {
@@ -81,5 +90,7 @@ final class Settings: ObservableObject {
         if let data = try? JSONEncoder().encode(quickLaunch) {
             d.set(data, forKey: "proto.quickLaunch")
         }
+        d.set(chromeProfilesEnabled, forKey: "quickLaunchProfilesEnabled")
+        d.set(windowPlacementEnabled, forKey: "quickLaunchPlacementEnabled")
     }
 }

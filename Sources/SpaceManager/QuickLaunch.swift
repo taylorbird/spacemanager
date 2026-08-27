@@ -15,6 +15,10 @@ struct QuickLaunchApp: Codable, Identifiable, Equatable {
     /// Optional (nil = ⌘N) so entries persisted before this field existed
     /// still decode instead of resetting the whole list to defaults.
     var newWindowKey: Int?
+    /// Chrome profile directory ("Default", "Profile 1"); nil = no targeting.
+    var chromeProfile: String?
+    /// Where the new window should land; nil = leave it where the app puts it.
+    var placement: PlacementSpec?
 
     static let defaults: [QuickLaunchApp] = normalized([
         QuickLaunchApp(label: "Ghostty", bundleID: "com.mitchellh.ghostty"),
