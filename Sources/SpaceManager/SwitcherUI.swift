@@ -22,14 +22,27 @@ enum TileMetrics {
 /// is known before layout — that's what lets it be offset clear of the panel
 /// without measuring anything, and it never resizes with its content.
 enum MenuMetrics {
-    static let width: CGFloat = 360
-    static let rowHeight: CGFloat = 50
+    static let width: CGFloat = 300
+    static let rowHeight: CGFloat = 40
     static let inset: CGFloat = 7
     /// Breathing room between the panel's bottom edge and the card's top.
     static let gap: CGFloat = 12
 
     static func height(rows: Int) -> CGFloat {
         CGFloat(rows) * rowHeight + inset * 2
+    }
+
+    /// Card centered under the highlighted tile, clamped to the row's edges
+    /// so an end tile's card tucks inward (popover-style) instead of
+    /// overhanging the panel. A card wider than the whole row centers on it.
+    static func xOffset(pos: Int, tiles: Int) -> CGFloat {
+        let rowWidth = CGFloat(tiles) * TileMetrics.width
+            + CGFloat(max(0, tiles - 1)) * TileMetrics.gap
+            + TileMetrics.rowInset * 2
+        guard width <= rowWidth else { return (rowWidth - width) / 2 }
+        let centered = TileMetrics.leadingOffset(pos: pos)
+            + (TileMetrics.width - width) / 2
+        return min(max(centered, 0), rowWidth - width)
     }
 }
 
@@ -477,7 +490,8 @@ struct SwitcherView: View {
             .overlay(alignment: .bottomLeading) {
                 if model.menuOpen {
                     menuCard
-                        .offset(x: TileMetrics.leadingOffset(pos: model.highlight),
+                        .offset(x: MenuMetrics.xOffset(pos: model.highlight,
+                                                       tiles: model.filtered.count),
                                 y: MenuMetrics.height(rows: model.menuItems.count)
                                     + MenuMetrics.gap)
                 }
@@ -508,7 +522,7 @@ struct SwitcherView: View {
         return VStack(spacing: 0) {
             ForEach(Array(model.menuItems.enumerated()), id: \.element.id) { pos, item in
                 let selected = pos == model.menuSelection
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     menuIcon(item)
                     Text(item.label)
                         .lineLimit(1)
@@ -519,7 +533,7 @@ struct SwitcherView: View {
                             .foregroundStyle(selected ? .secondary : .tertiary)
                     }
                 }
-                .padding(.horizontal, 13)
+                .padding(.horizontal, 11)
                 .frame(height: MenuMetrics.rowHeight)
                 .background(RoundedRectangle(cornerRadius: 7)
                     .fill(selected ? accent.opacity(0.28) : .clear))
@@ -528,7 +542,7 @@ struct SwitcherView: View {
                 .onHover { if $0 { model.menuSelection = pos } }
             }
         }
-        .font(.system(size: 19))
+        .font(.system(size: 15))
         .padding(MenuMetrics.inset)
         .frame(width: MenuMetrics.width, alignment: .leading)
         .background(
@@ -547,19 +561,19 @@ struct SwitcherView: View {
         switch item {
         case .rename:
             Image(systemName: "pencil")
-                .font(.system(size: 20))
+                .font(.system(size: 14))
                 .foregroundStyle(.secondary)
-                .frame(width: 32, height: 32)
+                .frame(width: 24, height: 24)
         case .launch(let app):
             if let icon = app.icon {
                 Image(nsImage: icon)
                     .resizable()
-                    .frame(width: 32, height: 32)
+                    .frame(width: 24, height: 24)
             } else {
                 Image(systemName: "app.dashed")
-                    .font(.system(size: 20))
+                    .font(.system(size: 14))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 24, height: 24)
             }
         }
     }
