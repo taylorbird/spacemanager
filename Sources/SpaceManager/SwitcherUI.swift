@@ -30,12 +30,14 @@ enum MenuMetrics {
 
     static let labelHeight: CGFloat = 18
     static let dividerPad: CGFloat = 5
+    /// App cells are taller than text rows: centered icon with the name under it.
+    static let appCellHeight: CGFloat = 64
 
-    /// Rename row, then (when apps exist) divider + label + one row per app.
+    /// Rename row, then (when apps exist) divider + label + one cell per app.
     /// Still fully computable before layout — see the type comment.
     static func cardHeight(apps: Int) -> CGFloat {
         let appsBlock: CGFloat = apps > 0
-            ? 1 + dividerPad * 2 + labelHeight + CGFloat(apps) * rowHeight : 0
+            ? 1 + dividerPad * 2 + labelHeight + CGFloat(apps) * appCellHeight : 0
         return rowHeight + appsBlock + inset * 2
     }
 
@@ -551,24 +553,24 @@ struct SwitcherView: View {
 
                 ForEach(Array(apps.enumerated()), id: \.element.id) { pos, app in
                     let selected = model.menuSelection == pos + 1
-                    HStack(spacing: 10) {
+                    VStack(spacing: 4) {
                         if let icon = app.icon {
                             Image(nsImage: icon)
                                 .resizable()
-                                .frame(width: 24, height: 24)
+                                .frame(width: 32, height: 32)
                         } else {
                             Image(systemName: "app.dashed")
-                                .font(.system(size: 14))
+                                .font(.system(size: 18))
                                 .foregroundStyle(.secondary)
-                                .frame(width: 24, height: 24)
+                                .frame(width: 32, height: 32)
                         }
                         Text(app.label)
+                            .font(.system(size: 12))
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 11)
-                    .frame(height: MenuMetrics.rowHeight)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: MenuMetrics.appCellHeight)
                     .background(RoundedRectangle(cornerRadius: 7)
                         .fill(selected ? accent.opacity(0.28) : .clear))
                     .contentShape(Rectangle())
