@@ -20,13 +20,22 @@ final class PreferencesController {
             w.contentView = NSHostingView(rootView: PreferencesView(settings: settings))
             window = w
         }
+        if firstShow, let w = window {
+            // The window is created zero-size and SwiftUI sizes it lazily —
+            // ordering front does NOT force that layout synchronously, so
+            // center() on a zero frame parks the window at the screen top.
+            // Size it explicitly from the hosting view's ideal size, center,
+            // and recenter next runloop in case layout adjusted the frame.
+            // First show only — a position the user drags to later is kept.
+            if let content = w.contentView {
+                content.layoutSubtreeIfNeeded()
+                w.setContentSize(content.fittingSize)
+            }
+            w.center()
+            DispatchQueue.main.async { w.center() }
+        }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
-        // Center only after ordering front: the window is created zero-size
-        // and SwiftUI sizes it during the first layout pass, so centering at
-        // creation centers a 0x0 point and the window grows off-center.
-        // Only on first show — a position the user chose later is kept.
-        if firstShow { window?.center() }
     }
 }
 
