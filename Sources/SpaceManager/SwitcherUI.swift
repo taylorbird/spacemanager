@@ -438,10 +438,13 @@ struct SwitcherView: View {
         }
     }
 
-    /// Trailing hint, with the leading side left open for future hints.
+    /// Key hints leading, preferences hint trailing.
     private var footer: some View {
         HStack {
-            Spacer(minLength: 0)
+            Text("1–9 jumps · ⏎ selects · ↓ more")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 20)
             Text("⌘, preferences")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
@@ -456,7 +459,7 @@ struct SwitcherView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
             if model.filter.isEmpty {
-                Text("Type to filter · 1–9 jumps · ⏎ selects · ↓ more")
+                Text("Type to filter")
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             } else {
