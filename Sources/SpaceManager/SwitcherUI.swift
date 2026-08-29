@@ -13,8 +13,9 @@ enum TileMetrics {
     static let gap: CGFloat = 18
     static let rowInset: CGFloat = 16
     /// Fixed so the menu-card offset can account for it — the footer sits
-    /// between the tiles row and the panel's bottom edge.
-    static let footerHeight: CGFloat = 18
+    /// between the tiles row and the panel's bottom edge. Tall enough that
+    /// hints float clear of the panel edge instead of hugging it.
+    static let footerHeight: CGFloat = 28
 
     static func leadingOffset(pos: Int) -> CGFloat {
         rowInset + CGFloat(pos) * (width + gap)
@@ -437,6 +438,7 @@ struct SwitcherView: View {
         }
     }
 
+    /// Trailing hint, with the leading side left open for future hints.
     private var footer: some View {
         HStack {
             Spacer(minLength: 0)
@@ -444,8 +446,9 @@ struct SwitcherView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 16)
-        .frame(height: TileMetrics.footerHeight)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 4)
+        .frame(height: TileMetrics.footerHeight, alignment: .center)
     }
 
     private var header: some View {
