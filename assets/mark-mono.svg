@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- One-color variant for the menu bar and template contexts.
+       Inherits color via currentColor; the glass read comes from opacity alone. -->
+  <g transform="translate(2.2 0) skewX(-8)" fill="currentColor">
+    <rect x="3.2" y="6" width="6.4" height="12" rx="1.2" opacity="0.45"/>
+    <rect x="8.2" y="4.5" width="6.4" height="15" rx="1.2" opacity="0.9"/>
+    <rect x="13.2" y="6" width="6.4" height="12" rx="1.2" opacity="0.45"/>
+  </g>
+</svg>
