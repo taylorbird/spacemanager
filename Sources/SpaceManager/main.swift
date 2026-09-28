@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let setupStatus = SetupStatus()
     let peek = TraversalPeek()
     let previews = PreviewStore()
+    let watchdog = MainThreadWatchdog()
     /// Last predicted destination during a Ctrl+arrow traversal; reset on landing.
     private var peekIndex: Int?
     /// Prevents preview captures from piling up during rapid switching —
@@ -48,12 +49,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBar: StatusBarController!
     var scheduler: ArrivalScheduler!
     var quickLauncher: QuickLauncher!
+    var windowMover: WindowMover!
     var editController: SpaceEditController!
     var actionsEditor: ActionsEditorController!
     var preferences: PreferencesController!
     var setupGuide: SetupGuideController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        watchdog.start()
         guard let engine = SpaceEngine() else {
             let alert = NSAlert()
             alert.messageText = "SpaceManager can't read Spaces"
@@ -67,8 +70,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel = SpacesViewModel(engine: engine, metadata: metadata)
         hud = HUDController(settings: settings)
         quickLauncher = QuickLauncher(settings: settings, viewModel: viewModel)
+        windowMover = WindowMover(performSwitch: { [weak self] in
+            self?.performSwitch(index: $0) ?? false
+        })
         switcher = SwitcherController(viewModel: viewModel, previews: previews, metadata: metadata,
-                                      settings: settings, launcher: quickLauncher)
+                                      settings: settings, launcher: quickLauncher,
+                                      mover: windowMover)
         scheduler = ArrivalScheduler(settings: settings, store: actionsStore, runner: runner)
         editController = SpaceEditController(metadata: metadata)
         actionsEditor = ActionsEditorController(viewModel: viewModel, store: actionsStore, settings: settings)
@@ -103,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.scheduler.arrived(at: info.uuid)
             self.quickLauncher.arrived(at: info.uuid)
+            self.windowMover.arrived(at: info.uuid)
             self.capturePreviewSoon(for: info.uuid)
             if info.type != 0 {
                 // Full-screen space: the frontmost app IS the space's app.
@@ -117,11 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Switching: real keystroke synthesis, or the setup guide if blocked.
         viewModel.requestSwitch = { [weak self] index in
             guard let self, index != self.viewModel.currentIndex else { return }
-            self.setupStatus.recheck()
-            guard self.setupStatus.canSwitch(toIndex: index), Switching.switchTo(index: index) else {
-                self.setupGuide.show()
-                return
-            }
+            self.performSwitch(index: index)
         }
 
         // Traversal peek: flash the predicted destination the instant
@@ -158,6 +162,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !setupStatus.isReady(spaceCount: viewModel.items.count) {
             setupGuide.show()
         }
+    }
+
+    /// The single gate for a real space switch: recheck the system
+    /// requirements, post the keystroke, and surface the setup guide when
+    /// either step refuses. Returns whether the keystroke actually went out —
+    /// the window mover needs that answer so it never holds a drag open on a
+    /// switch that was never going to happen.
+    @discardableResult
+    func performSwitch(index: Int) -> Bool {
+        setupStatus.recheck()
+        guard setupStatus.canSwitch(toIndex: index), Switching.switchTo(index: index) else {
+            setupGuide.show()
+            return false
+        }
+        return true
     }
 
     /// Screenshot the space ~0.7s after arriving (post-transition, HUD gone),

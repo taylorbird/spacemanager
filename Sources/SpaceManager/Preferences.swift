@@ -49,6 +49,7 @@ struct PreferencesView: View {
 
             Toggle("Open Chrome in a specific profile", isOn: $settings.chromeProfilesEnabled)
             Toggle("Position new windows", isOn: $settings.windowPlacementEnabled)
+            Toggle("Move windows between spaces", isOn: $settings.moveWindowEnabled)
             Text("Both off = plain launches, exactly as before these features existed.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
 

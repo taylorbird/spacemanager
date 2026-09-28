@@ -75,7 +75,7 @@ final class WindowPlacer {
     /// load the profile before showing a window and can blow the default.
     func placeNextWindow(pid: pid_t, frame: CGRect, wait: TimeInterval = 3.0) {
         guard AXIsProcessTrusted(), pid > 0 else {
-            NSLog("WindowPlacer: not armed (AX trusted=%d pid=%d)", AXIsProcessTrusted() ? 1 : 0, pid)
+            Log.placer.notice("not armed (AX trusted=\(AXIsProcessTrusted(), privacy: .public) pid=\(pid, privacy: .public))")
             return
         }
         cancel()
@@ -86,7 +86,7 @@ final class WindowPlacer {
         target = frame
         deadline = Date().addingTimeInterval(wait)
         active = true
-        NSLog("WindowPlacer: armed pid=%d snapshot=%d wait=%.1fs", pid, before.count, wait)
+        Log.placer.notice("armed pid=\(pid, privacy: .public) snapshot=\(self.before.count, privacy: .public) wait=\(wait, format: .fixed(precision: 1), privacy: .public)s")
 
         // Observer for low latency; the poll below is the reliability layer
         // (macOS 26 AX notifications can silently die — Phoenix #366).
@@ -145,7 +145,7 @@ final class WindowPlacer {
     private func check() {
         guard active, let app = appElement else { return }
         guard Date() < deadline else {
-            NSLog("WindowPlacer: timed out, no new window detected")
+            Log.placer.notice("timed out, no new window detected")
             cancel()
             return
         }
@@ -158,7 +158,7 @@ final class WindowPlacer {
         active = false
         let frame = target
         cancel()
-        NSLog("WindowPlacer: new window detected, applying %@", String(describing: frame))
+        Log.placer.notice("new window detected, applying \(frame.logDescription, privacy: .public)")
         queue.async { Self.apply(frame: frame, to: fresh, appElement: app) }
     }
 
@@ -227,8 +227,7 @@ final class WindowPlacer {
         // height delta on Ghostty is expected (cause unexplained — do not
         // "fix" it here).
         if abs(landed.x - frame.origin.x) > 8 || abs(landed.y - frame.origin.y) > 8 {
-            NSLog("WindowPlacer: window landed at %@ instead of %@ (best-effort, leaving it)",
-                  String(describing: landed), String(describing: frame.origin))
+            Log.placer.notice("window landed at \(landed.logDescription, privacy: .public) instead of \(frame.origin.logDescription, privacy: .public) (best-effort, leaving it)")
         }
     }
 }

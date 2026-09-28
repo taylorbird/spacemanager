@@ -55,6 +55,9 @@ final class Settings: ObservableObject {
     /// state is the escape hatch for machines where AX side effects matter.
     @Published var chromeProfilesEnabled: Bool { didSet { save() } }
     @Published var windowPlacementEnabled: Bool { didSet { save() } }
+    /// Off = the switcher's "Move ‹app› window here" row never appears and no
+    /// focused window is captured when the switcher opens.
+    @Published var moveWindowEnabled: Bool { didSet { save() } }
 
     private let d = UserDefaults.standard
 
@@ -78,6 +81,8 @@ final class Settings: ObservableObject {
             ? true : d.bool(forKey: "quickLaunchProfilesEnabled")
         windowPlacementEnabled = d.object(forKey: "quickLaunchPlacementEnabled") == nil
             ? true : d.bool(forKey: "quickLaunchPlacementEnabled")
+        moveWindowEnabled = d.object(forKey: "moveWindowEnabled") == nil
+            ? true : d.bool(forKey: "moveWindowEnabled")
     }
 
     private func save() {
@@ -92,5 +97,6 @@ final class Settings: ObservableObject {
         }
         d.set(chromeProfilesEnabled, forKey: "quickLaunchProfilesEnabled")
         d.set(windowPlacementEnabled, forKey: "quickLaunchPlacementEnabled")
+        d.set(moveWindowEnabled, forKey: "moveWindowEnabled")
     }
 }

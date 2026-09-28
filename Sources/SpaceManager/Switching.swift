@@ -10,6 +10,14 @@ enum Switching {
 
     static var maxSpaces: Int { digitKeys.count }
 
+    /// 0-based space index for a digit-row key code, or nil if it isn't one.
+    /// Callers need this because `charactersIgnoringModifiers` does not ignore
+    /// Shift — Shift+1 arrives as "!", so digits have to be read off the key
+    /// code instead of the character.
+    static func index(forDigitKeyCode code: CGKeyCode) -> Int? {
+        digitKeys.firstIndex(of: code)
+    }
+
     @discardableResult
     static func switchTo(index: Int) -> Bool {
         guard AXIsProcessTrusted(), digitKeys.indices.contains(index) else { return false }

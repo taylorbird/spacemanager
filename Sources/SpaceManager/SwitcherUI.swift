@@ -37,12 +37,13 @@ enum MenuMetrics {
     /// App cells are taller than text rows: centered icon with the name under it.
     static let appCellHeight: CGFloat = 72
 
-    /// Rename row, then (when apps exist) divider + label + one cell per app.
-    /// Still fully computable before layout — see the type comment.
-    static func cardHeight(apps: Int) -> CGFloat {
+    /// Rename row, then any extra text rows (the move-window row), then (when
+    /// apps exist) divider + label + one cell per app. Still fully computable
+    /// before layout — see the type comment.
+    static func cardHeight(apps: Int, extraRows: Int = 0) -> CGFloat {
         let appsBlock: CGFloat = apps > 0
             ? 1 + dividerPad * 2 + labelHeight + CGFloat(apps) * appCellHeight : 0
-        return rowHeight + appsBlock + inset * 2
+        return rowHeight + CGFloat(extraRows) * rowHeight + appsBlock + inset * 2
     }
 
     /// Card centered under the highlighted tile, clamped to the row's edges
@@ -62,15 +63,27 @@ enum MenuMetrics {
 /// One row of the per-tile context menu (Down on a highlighted tile).
 enum TileMenuItem: Identifiable {
     case rename
+    /// Move the window that was focused when the switcher opened onto this tile.
+    case moveWindow(MovableWindow)
     case launch(QuickLaunchApp)
 
     var id: String {
         switch self {
         case .rename: return "rename"
+        case .moveWindow: return "move"
         case .launch(let app): return app.id.uuidString
         }
     }
 
+    var launchApp: QuickLaunchApp? {
+        if case .launch(let app) = self { return app }
+        return nil
+    }
+
+    var movableWindow: MovableWindow? {
+        if case .moveWindow(let window) = self { return window }
+        return nil
+    }
 }
 
 final class SwitcherModel: ObservableObject {
@@ -87,6 +100,12 @@ final class SwitcherModel: ObservableObject {
     // highlighted tile (decision 2026-08-25: Down used to rename directly).
     @Published var menuFor: SpaceItem?
     @Published var menuSelection = 0
+
+    /// The window that was focused when the switcher opened — nil when the
+    /// feature is off, or when there was nothing worth moving. Captured once
+    /// per open, because "frontmost" stops meaning anything useful the moment
+    /// the panel is up.
+    @Published var movable: MovableWindow?
 
     let viewModel: SpacesViewModel
     let metadata: MetadataStore
@@ -110,8 +129,26 @@ final class SwitcherModel: ObservableObject {
 
     var menuOpen: Bool { menuFor != nil }
 
+    /// The captured window, if moving it onto `item` makes sense: there has to
+    /// be a capture, the tile can't be the space we're already on, and neither
+    /// end can be full-screen — a full-screen space has no room to drop a
+    /// window into, and you can't drag a window out of one.
+    func movableWindow(for item: SpaceItem) -> MovableWindow? {
+        guard let window = movable,
+              item.index != viewModel.currentIndex,
+              !item.isFullScreen,
+              viewModel.current?.isFullScreen == false else { return nil }
+        return window
+    }
+
+    /// The move row for the tile the menu is open on, if any.
+    var moveRow: TileMenuItem? {
+        guard let target = menuFor, let window = movableWindow(for: target) else { return nil }
+        return .moveWindow(window)
+    }
+
     var menuItems: [TileMenuItem] {
-        [.rename] + quickLaunchApps.map { .launch($0) }
+        [.rename] + (moveRow.map { [$0] } ?? []) + quickLaunchApps.map { .launch($0) }
     }
 
     func openMenu(_ item: SpaceItem) {
@@ -219,15 +256,33 @@ final class SwitcherController {
     private let model: SwitcherModel
     private let viewModel: SpacesViewModel
     private let launcher: QuickLauncher
+    private let settings: Settings
+    private let mover: WindowMover
     /// ⌘, from inside the switcher; wired by the app delegate.
     var onPreferences: (() -> Void)?
 
+    /// Initial size only — `open()` sizes the stage to the screen.
     private let stageSize = NSSize(width: 1200, height: 540)
+    /// The panel's top edge sits this fraction of the screen below the top.
+    private static let topInset: CGFloat = 0.18
+
+    /// Open/closed as far as this controller is concerned. Not
+    /// `panel.isVisible`: WindowServer can re-order a closed panel back on
+    /// screen (a click that landed on it while it was leaving comes back on
+    /// mouse-up), and a toggle keyed off visibility would then close a panel
+    /// the user can't type into instead of opening a usable one.
+    private(set) var isOpen = false
+    /// Bumped per open, so a capture that finishes after the switcher was
+    /// closed (or reopened) is dropped instead of landing on the wrong session.
+    private var session = 0
+    private var occlusionObserver: NSObjectProtocol?
 
     init(viewModel: SpacesViewModel, previews: PreviewStore, metadata: MetadataStore,
-         settings: Settings, launcher: QuickLauncher) {
+         settings: Settings, launcher: QuickLauncher, mover: WindowMover) {
         self.viewModel = viewModel
         self.launcher = launcher
+        self.settings = settings
+        self.mover = mover
         model = SwitcherModel(viewModel: viewModel, metadata: metadata, settings: settings)
         panel = KeyPanel(contentRect: NSRect(origin: .zero, size: stageSize),
                          styleMask: [.borderless, .nonactivatingPanel],
@@ -245,14 +300,33 @@ final class SwitcherController {
             spaces: viewModel,
             previews: previews,
             onPick: { [weak self] index in self?.select(absolute: index) },
-            onMenuPick: { [weak self] item in self?.activate(item) }
+            onMenuPick: { [weak self] item in self?.activate(item) },
+            onMoveWindow: { [weak self] window, item in self?.moveWindow(window, to: item) }
         )
         panel.contentView = NSHostingView(rootView: view)
         panel.keyHandler = { [weak self] event in self?.handle(event) ?? false }
         panel.onResign = { [weak self] in self?.close() }
+        panel.ignoresMouseEvents = true // closed until open() says otherwise
+
+        // Backstop for the stuck-switcher bug: if WindowServer puts the panel
+        // back on screen while we consider it closed, it has no key focus and
+        // can't be dismissed with Esc — take it straight back off.
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: panel, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            let visible = self.panel.occlusionState.contains(.visible)
+            Log.switcher.notice("panel occlusion visible=\(visible, privacy: .public) isOpen=\(self.isOpen, privacy: .public) key=\(self.panel.isKeyWindow, privacy: .public)")
+            guard !self.isOpen, visible else { return }
+            Log.switcher.error("switcher panel reappeared while closed; ordering it out")
+            self.panel.orderOut(nil)
+        }
     }
 
-    var isOpen: Bool { panel.isVisible }
+    deinit {
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+    }
 
     func toggle() {
         isOpen ? close() : open()
@@ -261,22 +335,50 @@ final class SwitcherController {
     func open() {
         viewModel.engine.refresh() // catch added/removed spaces before showing
         model.reset()
+        session += 1
+        let thisSession = session
+        // The frontmost app is read now, before the panel shows (it's a
+        // nonactivating panel so that shouldn't matter — but the capture must
+        // not depend on it). The AX queries finish off the main thread and
+        // land a moment later; ⇧⏎ in that gap simply has nothing to move.
+        // Feature off = no capture at all.
+        model.movable = nil
+        if settings.moveWindowEnabled {
+            MovableWindow.captureFocusedWindow { [weak self] window in
+                guard let self, self.isOpen, self.session == thisSession else { return }
+                self.model.movable = window
+            }
+        }
         if let screen = NSScreen.main {
-            // Full-width transparent stage; the card centers itself.
+            // Full-width transparent stage from the top inset to the bottom
+            // of the screen, so the tile menu card below the panel always has
+            // room — the card is drawn inside this window and would be
+            // clipped by a shorter one. Transparent areas pass clicks through.
             let f = screen.visibleFrame
-            panel.setFrame(NSRect(x: f.minX,
-                                  y: f.maxY - f.height * 0.18 - stageSize.height,
-                                  width: f.width, height: stageSize.height),
+            let top = f.maxY - f.height * Self.topInset
+            panel.setFrame(NSRect(x: f.minX, y: f.minY,
+                                  width: f.width, height: top - f.minY),
                            display: true)
         }
+        isOpen = true
+        panel.ignoresMouseEvents = false
         panel.makeKeyAndOrderFront(nil)
+        Log.switcher.notice("opened, panel frame \(self.panel.frame.logDescription, privacy: .public) (Cocoa coordinates)")
     }
 
     func close() {
-        guard panel.isVisible else { return }
+        guard isOpen || panel.isVisible else { return }
+        isOpen = false
+        session += 1
         model.cancelEdit()
         model.closeMenu()
+        model.movable = nil
+        // Click-through before it leaves: a synthesized mouse-down that
+        // arrives while WindowServer still shows the panel must pass through
+        // to the window underneath instead of landing on us.
+        panel.ignoresMouseEvents = true
         panel.orderOut(nil)
+        Log.switcher.notice("closed")
     }
 
     private func select(absolute index: Int) {
@@ -316,9 +418,32 @@ final class SwitcherController {
         switch item {
         case .rename:
             model.beginEdit(target)
+        case .moveWindow(let window):
+            moveWindow(window, to: target)
         case .launch(let app):
             quickLaunch(app, onSpaceIndex: target.index)
         }
+    }
+
+    /// Closing first is load-bearing: the mover's synthesized mouse-down must
+    /// land on the window's title bar, not on our own panel — so the mover
+    /// also waits for the panel to be verifiably off screen before clicking.
+    private func moveWindow(_ window: MovableWindow, to item: SpaceItem) {
+        close()
+        mover.move(window, toSpaceUUID: item.uuid, index: item.index,
+                   obstructions: [CGWindowID(panel.windowNumber)])
+    }
+
+    /// ⇧⏎: move the captured window onto the highlighted tile. False when
+    /// there's nothing to move there — no capture, the current space, or a
+    /// full-screen end (see `SwitcherModel.movableWindow(for:)`).
+    private func moveHighlighted() -> Bool {
+        let rows = model.filtered
+        guard rows.indices.contains(model.highlight) else { return false }
+        let item = rows[model.highlight]
+        guard let window = model.movableWindow(for: item) else { return false }
+        moveWindow(window, to: item)
+        return true
     }
 
     private func activateSelectedMenuItem() {
@@ -327,7 +452,11 @@ final class SwitcherController {
         activate(items[model.menuSelection])
     }
 
-    /// Returns true when the event was consumed.
+    /// Returns true when the event was consumed. The map, in priority order:
+    /// edit mode owns everything but Esc; ⇧⏎ moves the captured window to the
+    /// highlighted tile; the tile menu owns Up/Down/Enter/Esc while open; then
+    /// Esc/⏎/←/→/⇥/↓/Delete, ⌘-keys, digits (⇧-digit moves instead of
+    /// jumping), and finally letters into the filter.
     private func handle(_ event: NSEvent) -> Bool {
         // Edit mode: Esc backs out; every other key reaches the text fields
         // (Enter saves via the field's onSubmit).
@@ -337,6 +466,16 @@ final class SwitcherController {
                 return true
             }
             return false
+        }
+
+        // ⇧⏎ moves the captured window to the highlighted tile. Ahead of the
+        // tile menu so the menu's own Return can't swallow it, and it always
+        // consumes the event: a ⇧⏎ with nothing to move must do nothing rather
+        // than fall through to a plain select.
+        if event.keyCode == 36 || event.keyCode == 76, event.modifierFlags.contains(.shift) {
+            model.closeMenu()
+            _ = moveHighlighted()
+            return true
         }
 
         // Tile menu owns Up/Down/Enter/Esc while it's open. Every other key
@@ -357,6 +496,9 @@ final class SwitcherController {
         case 123: model.moveHighlight(-1); return true   // Left
         case 124: model.moveHighlight(1); return true    // Right
         case 125: openMenuHighlighted(); return true     // Down = tile menu
+        case 48:                                         // Tab / ⇧Tab walk tiles
+            model.moveHighlight(event.modifierFlags.contains(.shift) ? -1 : 1)
+            return true
         case 126: return true                            // Up: reserved, no beep
         case 51: model.backspace(); return true          // Delete
         default: break
@@ -379,10 +521,22 @@ final class SwitcherController {
             return true
         }
 
-        // Digits 1-9 ALWAYS jump immediately, even mid-filter (reserved keys).
-        if let d = c.wholeNumberValue, (1...9).contains(d),
-           event.modifierFlags.intersection([.command, .option]).isEmpty {
-            if viewModel.items.indices.contains(d - 1) { select(absolute: d - 1) }
+        // Digits 1-9 ALWAYS jump immediately, even mid-filter (reserved keys),
+        // and ⇧1-9 moves the captured window straight to that space instead.
+        // The index comes off the key code because `charactersIgnoringModifiers`
+        // does not ignore Shift — ⇧1 arrives as "!" — with the character as a
+        // fallback so the numeric keypad still jumps.
+        let digit = Switching.index(forDigitKeyCode: event.keyCode)
+            ?? c.wholeNumberValue.flatMap { (1...9).contains($0) ? $0 - 1 : nil }
+        if let d = digit, event.modifierFlags.intersection([.command, .option]).isEmpty {
+            if event.modifierFlags.contains(.shift) {
+                if viewModel.items.indices.contains(d),
+                   let window = model.movableWindow(for: viewModel.items[d]) {
+                    moveWindow(window, to: viewModel.items[d])
+                }
+            } else if viewModel.items.indices.contains(d) {
+                select(absolute: d)
+            }
             return true
         }
 
@@ -405,6 +559,9 @@ struct SwitcherView: View {
     @ObservedObject var previews: PreviewStore
     var onPick: (Int) -> Void
     var onMenuPick: (TileMenuItem) -> Void
+    /// Right-click path: the target tile comes from the gesture, not from
+    /// `model.menuFor`, which only the Down-menu sets.
+    var onMoveWindow: (MovableWindow, SpaceItem) -> Void
 
     @FocusState private var nameFocused: Bool
 
@@ -438,13 +595,18 @@ struct SwitcherView: View {
         }
     }
 
-    /// Key hints leading, preferences hint trailing.
+    /// Key hints leading, preferences hint trailing, and — only when a window
+    /// was captured on open — a centered chip naming it and its move keys.
     private var footer: some View {
         HStack {
-            Text("1–9 jumps · ⏎ selects · ↓ more")
+            Text("1–9 jumps · ⏎ selects · ⇥ next · ↓ more")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
             Spacer(minLength: 20)
+            if let window = model.movable {
+                moveHint(window)
+                Spacer(minLength: 20)
+            }
             Text("⌘, preferences")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
@@ -452,6 +614,27 @@ struct SwitcherView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 4)
         .frame(height: TileMetrics.footerHeight, alignment: .center)
+    }
+
+    /// The captured window's app, plus the two keys that move it. Everything
+    /// stays at 10pt so the footer keeps its fixed height — the menu card's
+    /// offset math adds TileMetrics.footerHeight and would drift otherwise.
+    private func moveHint(_ window: MovableWindow) -> some View {
+        HStack(spacing: 5) {
+            if let icon = window.icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 12, height: 12)
+            } else {
+                Image(systemName: "macwindow")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            Text("⇧⏎ move \(window.appName) here · ⇧1–9 to a number")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
     }
 
     private var header: some View {
@@ -502,6 +685,11 @@ struct SwitcherView: View {
                         .onTapGesture { onPick(item.index) }
                         .contextMenu {
                             Button("Rename “\(item.name)”…") { model.beginEdit(item) }
+                            if let window = model.movableWindow(for: item) {
+                                Button("Move \(window.appName) window here") {
+                                    onMoveWindow(window, item)
+                                }
+                            }
                         }
                 }
             }
@@ -517,7 +705,9 @@ struct SwitcherView: View {
                     menuCard
                         .offset(x: MenuMetrics.xOffset(pos: model.highlight,
                                                        tiles: model.filtered.count),
-                                y: MenuMetrics.cardHeight(apps: model.menuItems.count - 1)
+                                y: MenuMetrics.cardHeight(
+                                        apps: model.menuItems.compactMap(\.launchApp).count,
+                                        extraRows: model.menuItems.compactMap(\.movableWindow).count)
                                     + MenuMetrics.gap + TileMetrics.footerHeight)
                 }
             }
@@ -539,17 +729,17 @@ struct SwitcherView: View {
             .padding(.horizontal, 8.5) // keeps the ~18pt tile gap
     }
 
-    /// Floating satellite card for the highlighted tile: a Rename row, then
-    /// the quick-launch apps as a centered icon strip under an "Open in"
-    /// label. The label names the selected app — the icons carry no text, so
-    /// keyboard navigation needs the name somewhere. Selection indices are
-    /// unchanged: 0 is Rename, 1… are the apps, Down/Up walks them all.
+    /// Floating satellite card for the highlighted tile: a Rename row, an
+    /// optional "Move ‹app› window here" row, then the quick-launch apps as a
+    /// centered icon strip under an "Open in" label. The label names the
+    /// selected app — the icons carry no text, so keyboard navigation needs
+    /// the name somewhere. Selection index 0 is Rename; the move row, when
+    /// present, is 1, which is what shifts the apps to `pos + appBase`.
     private var menuCard: some View {
         let accent = model.menuFor?.accentColor ?? .secondary
-        let apps: [QuickLaunchApp] = model.menuItems.compactMap {
-            if case .launch(let app) = $0 { return app }
-            return nil
-        }
+        let apps: [QuickLaunchApp] = model.menuItems.compactMap(\.launchApp)
+        let moveWindow: MovableWindow? = model.menuItems.compactMap(\.movableWindow).first
+        let appBase = 1 + (moveWindow == nil ? 0 : 1)
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "pencil")
@@ -567,6 +757,32 @@ struct SwitcherView: View {
             .onTapGesture { onMenuPick(.rename) }
             .onHover { if $0 { model.menuSelection = 0 } }
 
+            if let window = moveWindow {
+                HStack(spacing: 10) {
+                    if let icon = window.icon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 18, height: 18)
+                            .frame(width: 24, height: 24)
+                    } else {
+                        Image(systemName: "macwindow")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                    }
+                    Text("Move window here")
+                        .help("Move the \(window.appName) window to this space")
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 11)
+                .frame(height: MenuMetrics.rowHeight)
+                .background(RoundedRectangle(cornerRadius: 7)
+                    .fill(model.menuSelection == 1 ? accent.opacity(0.28) : .clear))
+                .contentShape(Rectangle())
+                .onTapGesture { onMenuPick(.moveWindow(window)) }
+                .onHover { if $0 { model.menuSelection = 1 } }
+            }
+
             if !apps.isEmpty {
                 Rectangle()
                     .fill(Color.white.opacity(0.10))
@@ -582,7 +798,7 @@ struct SwitcherView: View {
                     .frame(height: MenuMetrics.labelHeight)
 
                 ForEach(Array(apps.enumerated()), id: \.element.id) { pos, app in
-                    let selected = model.menuSelection == pos + 1
+                    let selected = model.menuSelection == pos + appBase
                     VStack(spacing: 4) {
                         if let icon = app.icon {
                             Image(nsImage: icon)
@@ -605,13 +821,18 @@ struct SwitcherView: View {
                         .fill(selected ? accent.opacity(0.28) : .clear))
                     .contentShape(Rectangle())
                     .onTapGesture { onMenuPick(.launch(app)) }
-                    .onHover { if $0 { model.menuSelection = pos + 1 } }
+                    .onHover { if $0 { model.menuSelection = pos + appBase } }
                 }
             }
         }
         .font(.system(size: 15))
         .padding(MenuMetrics.inset)
-        .frame(width: MenuMetrics.width, alignment: .leading)
+        // Pinned to the computed height the overlay offset uses, so the card
+        // drawn and the card the layout math positions can't drift apart.
+        .frame(width: MenuMetrics.width,
+               height: MenuMetrics.cardHeight(apps: apps.count,
+                                              extraRows: moveWindow == nil ? 0 : 1),
+               alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(.thinMaterial)

@@ -28,7 +28,7 @@ enum ScreenCapture {
     /// Third-resolution screenshot of the main display — plenty for tiles.
     static func captureMainDisplay() async -> NSImage? {
         guard authorized else {
-            NSLog("preview: skipped — Screen Recording not authorized")
+            Log.preview.notice("skipped — Screen Recording not authorized")
             return nil
         }
         do {
@@ -36,7 +36,7 @@ enum ScreenCapture {
                 .excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() })
                 ?? content.displays.first else {
-                NSLog("preview: no display in shareable content")
+                Log.preview.notice("no display in shareable content")
                 return nil
             }
             let filter = SCContentFilter(display: display, excludingWindows: [])
@@ -46,10 +46,10 @@ enum ScreenCapture {
             config.showsCursor = false
             let cgImage = try await SCScreenshotManager.captureImage(
                 contentFilter: filter, configuration: config)
-            NSLog("preview: captured %dx%d", cgImage.width, cgImage.height)
+            Log.preview.notice("captured \(cgImage.width, privacy: .public)x\(cgImage.height, privacy: .public)")
             return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
         } catch {
-            NSLog("preview: capture failed: %@", String(describing: error))
+            Log.preview.error("capture failed: \(String(describing: error), privacy: .public)")
             return nil
         }
     }
