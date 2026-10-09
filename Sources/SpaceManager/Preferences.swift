@@ -41,9 +41,16 @@ final class PreferencesController {
 
 struct PreferencesView: View {
     @ObservedObject var settings: Settings
+    @StateObject private var launchAtLogin = LaunchAtLogin()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            Text("General").font(.headline)
+
+            launchAtLoginSection
+
+            Divider()
+
             Text("Quick Launch").font(.headline)
 
             Toggle("Open Chrome in a specific profile", isOn: $settings.chromeProfilesEnabled)
@@ -69,6 +76,30 @@ struct PreferencesView: View {
         }
         .padding(20)
         .frame(width: 560)
+    }
+
+    /// Mirrors macOS's login-item state; re-read whenever the window comes
+    /// forward, since the user may have changed it in System Settings.
+    private var launchAtLoginSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Launch at login", isOn: Binding(
+                get: { launchAtLogin.isEnabled || launchAtLogin.needsApproval },
+                set: { launchAtLogin.setEnabled($0) }
+            ))
+            if launchAtLogin.needsApproval {
+                HStack(spacing: 8) {
+                    Text("Allow Space Manager in System Settings to finish turning this on.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    Button("Open Login Items") { launchAtLogin.openLoginItemsSettings() }
+                }
+            }
+            if let error = launchAtLogin.lastError {
+                Text(error).font(.system(size: 11)).foregroundStyle(.red)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            launchAtLogin.refresh()
+        }
     }
 
     /// Snapshot of Chrome's profiles. Chrome's folder is read only when the
