@@ -58,6 +58,10 @@ final class Settings: ObservableObject {
     /// Off = the switcher's "Move ‹app› window here" row never appears and no
     /// focused window is captured when the switcher opens.
     @Published var moveWindowEnabled: Bool { didSet { save() } }
+    /// Snapshot of Chrome's profile list, taken only when the user clicks
+    /// Refresh in Preferences (reading Chrome's folder is TCC-gated). Every
+    /// runtime caller uses this, never a live read.
+    @Published var chromeProfiles: [ChromeProfiles.Profile] { didSet { save() } }
 
     private let d = UserDefaults.standard
 
@@ -83,6 +87,30 @@ final class Settings: ObservableObject {
             ? true : d.bool(forKey: "quickLaunchPlacementEnabled")
         moveWindowEnabled = d.object(forKey: "moveWindowEnabled") == nil
             ? true : d.bool(forKey: "moveWindowEnabled")
+        if let data = d.data(forKey: "chromeProfiles"),
+           let decoded = try? JSONDecoder().decode([ChromeProfiles.Profile].self, from: data) {
+            chromeProfiles = decoded
+        } else {
+            chromeProfiles = []
+        }
+    }
+
+    /// The one place Chrome's Local State is read. An empty read (denied,
+    /// Chrome missing) leaves the existing snapshot untouched.
+    func refreshChromeProfiles() {
+        let fresh = ChromeProfiles.load()
+        guard !fresh.isEmpty else {
+            Log.chrome.notice("refresh found no profiles; keeping snapshot of \(self.chromeProfiles.count, privacy: .public)")
+            return
+        }
+        chromeProfiles = ChromeProfiles.merge(existing: chromeProfiles, fresh: fresh)
+        Log.chrome.notice("refresh stored \(self.chromeProfiles.count, privacy: .public) profiles")
+    }
+
+    /// Guard against launching with a stale directory name: Chrome silently
+    /// CREATES a junk profile for an unknown --profile-directory value.
+    func chromeProfileExists(_ directory: String) -> Bool {
+        chromeProfiles.contains { $0.directory == directory }
     }
 
     private func save() {
@@ -98,5 +126,8 @@ final class Settings: ObservableObject {
         d.set(chromeProfilesEnabled, forKey: "quickLaunchProfilesEnabled")
         d.set(windowPlacementEnabled, forKey: "quickLaunchPlacementEnabled")
         d.set(moveWindowEnabled, forKey: "moveWindowEnabled")
+        if let data = try? JSONEncoder().encode(chromeProfiles) {
+            d.set(data, forKey: "chromeProfiles")
+        }
     }
 }

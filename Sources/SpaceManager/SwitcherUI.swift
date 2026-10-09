@@ -37,6 +37,17 @@ enum MenuMetrics {
     /// App cells are taller than text rows: centered icon with the name under it.
     static let appCellHeight: CGFloat = 72
 
+    /// Chrome profile submenu: a second card cascading beside this one.
+    static let submenuWidth: CGFloat = 300
+    /// Horizontal space between the menu card and the submenu card.
+    static let submenuGap: CGFloat = 8
+    /// Profile rows carry a name and an email line, so they're taller than
+    /// the card's text rows.
+    static let profileRowHeight: CGFloat = 44
+    /// Minimum clearance between the submenu and the screen's right edge
+    /// before it flips to the menu card's left.
+    static let screenMargin: CGFloat = 16
+
     /// Rename row, then any extra text rows (the move-window row), then (when
     /// apps exist) divider + label + one cell per app. Still fully computable
     /// before layout — see the type comment.
@@ -46,17 +57,49 @@ enum MenuMetrics {
         return rowHeight + CGFloat(extraRows) * rowHeight + appsBlock + inset * 2
     }
 
+    /// The Chrome profile submenu card: label, then one row per profile.
+    /// Same fixed-before-layout contract as the menu card.
+    static func submenuHeight(profiles: Int) -> CGFloat {
+        inset * 2 + labelHeight + CGFloat(profiles) * profileRowHeight
+    }
+
+    /// Y of the top of the app cell at `pos`, measured from the menu card's
+    /// top edge — mirrors `cardHeight`'s stacking (Rename, extra rows,
+    /// divider block, label, cells). The submenu's top aligns with it.
+    static func appCellTop(pos: Int, extraRows: Int) -> CGFloat {
+        inset + rowHeight + CGFloat(extraRows) * rowHeight
+            + 1 + dividerPad * 2 + labelHeight + CGFloat(pos) * appCellHeight
+    }
+
+    /// Tiles row width including its inset — shared by the card and submenu
+    /// x math.
+    static func rowWidth(tiles: Int) -> CGFloat {
+        CGFloat(tiles) * TileMetrics.width
+            + CGFloat(max(0, tiles - 1)) * TileMetrics.gap
+            + TileMetrics.rowInset * 2
+    }
+
     /// Card centered under the highlighted tile, clamped to the row's edges
     /// so an end tile's card tucks inward (popover-style) instead of
     /// overhanging the panel. A card wider than the whole row centers on it.
     static func xOffset(pos: Int, tiles: Int) -> CGFloat {
-        let rowWidth = CGFloat(tiles) * TileMetrics.width
-            + CGFloat(max(0, tiles - 1)) * TileMetrics.gap
-            + TileMetrics.rowInset * 2
+        let rowWidth = rowWidth(tiles: tiles)
         guard width <= rowWidth else { return (rowWidth - width) / 2 }
         let centered = TileMetrics.leadingOffset(pos: pos)
             + (TileMetrics.width - width) / 2
         return min(max(centered, 0), rowWidth - width)
+    }
+
+    /// Submenu card x, relative to the tiles row's leading edge (the same
+    /// anchor `xOffset` uses): right of the menu card, or left of it when
+    /// the right placement would come within `screenMargin` of the screen
+    /// edge. The row is centered in a stage `stageWidth` wide.
+    static func submenuXOffset(pos: Int, tiles: Int, stageWidth: CGFloat) -> CGFloat {
+        let menuX = xOffset(pos: pos, tiles: tiles)
+        let right = menuX + width + submenuGap
+        let rowLeading = (stageWidth - rowWidth(tiles: tiles)) / 2
+        guard rowLeading + right + submenuWidth > stageWidth - screenMargin else { return right }
+        return menuX - submenuGap - submenuWidth
     }
 }
 
@@ -101,6 +144,18 @@ final class SwitcherModel: ObservableObject {
     @Published var menuFor: SpaceItem?
     @Published var menuSelection = 0
 
+    // Chrome profile submenu (Right on a Chrome cell): nil = closed. Drawn as
+    // a drill-in inside the same card, so the parent menu stays open under it.
+    @Published var submenuProfiles: [ChromeProfiles.Profile]?
+    @Published var submenuSelection = 0
+    /// The Chrome entry the submenu was opened from. Kept here rather than
+    /// re-read through `menuSelection`: the move row can appear late (async
+    /// window capture) and shift the menu's indices under an open submenu.
+    private(set) var submenuApp: QuickLaunchApp?
+    /// Read once per menu open; empty when profile targeting is off or Chrome
+    /// has no readable Local State.
+    private(set) var cachedProfiles: [ChromeProfiles.Profile] = []
+
     /// The window that was focused when the switcher opened — nil when the
     /// feature is off, or when there was nothing worth moving. Captured once
     /// per open, because "frontmost" stops meaning anything useful the moment
@@ -128,6 +183,19 @@ final class SwitcherModel: ObservableObject {
     }
 
     var menuOpen: Bool { menuFor != nil }
+    var submenuOpen: Bool { submenuProfiles != nil }
+
+    static let chromeBundleID = "com.google.Chrome"
+
+    /// Right drills into a profile list only on a Chrome cell, with profile
+    /// targeting on and at least one profile found. Anything else keeps
+    /// Right's pre-submenu behavior.
+    func profileSubmenuAvailable(for item: TileMenuItem) -> Bool {
+        guard let app = item.launchApp else { return false }
+        return app.bundleID == Self.chromeBundleID
+            && settings.chromeProfilesEnabled
+            && !cachedProfiles.isEmpty
+    }
 
     /// The captured window, if moving it onto `item` makes sense: there has to
     /// be a capture, the tile can't be the space we're already on, and neither
@@ -154,11 +222,40 @@ final class SwitcherModel: ObservableObject {
     func openMenu(_ item: SpaceItem) {
         menuFor = item
         menuSelection = 0 // Rename is the default, as Down always was
+        cachedProfiles = settings.chromeProfilesEnabled ? settings.chromeProfiles.filter(\.enabled) : []
+        Log.switcher.notice("menu opened: \(self.menuItems.count, privacy: .public) items, profilesEnabled=\(self.settings.chromeProfilesEnabled, privacy: .public), profiles=\(self.cachedProfiles.count, privacy: .public)")
     }
 
     func closeMenu() {
+        closeSubmenu()
         menuFor = nil
         menuSelection = 0
+        cachedProfiles = []
+    }
+
+    /// Starts on the entry's configured default profile, so Right-then-Enter
+    /// does what plain Enter would have.
+    func openSubmenu() {
+        let items = menuItems
+        guard items.indices.contains(menuSelection),
+              profileSubmenuAvailable(for: items[menuSelection]),
+              let app = items[menuSelection].launchApp else { return }
+        submenuApp = app
+        submenuProfiles = cachedProfiles
+        submenuSelection = cachedProfiles.firstIndex { $0.directory == app.chromeProfile } ?? 0
+    }
+
+    /// Back to the parent menu, Chrome cell still selected.
+    func closeSubmenu() {
+        submenuProfiles = nil
+        submenuApp = nil
+        submenuSelection = 0
+    }
+
+    func moveSubmenuSelection(_ delta: Int) {
+        let count = submenuProfiles?.count ?? 0
+        guard count > 0 else { return }
+        submenuSelection = (submenuSelection + delta + count) % count
     }
 
     /// Wraps: a short vertical list reads like a menu, not like the tiles.
@@ -301,6 +398,7 @@ final class SwitcherController {
             previews: previews,
             onPick: { [weak self] index in self?.select(absolute: index) },
             onMenuPick: { [weak self] item in self?.activate(item) },
+            onProfilePick: { [weak self] app, profile in self?.launch(app, profile: profile) },
             onMoveWindow: { [weak self] window, item in self?.moveWindow(window, to: item) }
         )
         panel.contentView = NSHostingView(rootView: view)
@@ -452,9 +550,29 @@ final class SwitcherController {
         activate(items[model.menuSelection])
     }
 
+    private func activateSelectedProfile() {
+        guard let app = model.submenuApp,
+              let profiles = model.submenuProfiles,
+              profiles.indices.contains(model.submenuSelection) else { return }
+        launch(app, profile: profiles[model.submenuSelection])
+    }
+
+    /// One-off profile override onto the space the menu was opened for. The
+    /// launcher's own exists() guard still covers a stale directory.
+    private func launch(_ app: QuickLaunchApp, profile: ChromeProfiles.Profile) {
+        guard let target = model.menuFor else { return }
+        model.closeMenu()
+        var pick = app
+        pick.chromeProfile = profile.directory
+        Log.switcher.notice("profile pick \(profile.directory, privacy: .public) for \(app.label, privacy: .public) onto space \(target.index + 1, privacy: .public)")
+        quickLaunch(pick, onSpaceIndex: target.index)
+    }
+
     /// Returns true when the event was consumed. The map, in priority order:
     /// edit mode owns everything but Esc; ⇧⏎ moves the captured window to the
-    /// highlighted tile; the tile menu owns Up/Down/Enter/Esc while open; then
+    /// highlighted tile; the Chrome profile submenu owns Up/Down/Enter/Esc/←
+    /// while open; the tile menu owns Up/Down/Enter/Esc (and → on a Chrome
+    /// cell, which opens the submenu) while open; then
     /// Esc/⏎/←/→/⇥/↓/Delete, ⌘-keys, digits (⇧-digit moves instead of
     /// jumping), and finally letters into the filter.
     private func handle(_ event: NSEvent) -> Bool {
@@ -478,14 +596,35 @@ final class SwitcherController {
             return true
         }
 
-        // Tile menu owns Up/Down/Enter/Esc while it's open. Every other key
-        // dismisses it and then does its normal job.
+        // Profile submenu: Esc/Left step back to the menu; every other key
+        // dismisses both and then does its normal job.
+        if model.submenuOpen {
+            switch event.keyCode {
+            case 53, 123: model.closeSubmenu(); return true         // Esc / Left
+            case 125: model.moveSubmenuSelection(1); return true    // Down
+            case 126: model.moveSubmenuSelection(-1); return true   // Up
+            case 36, 76: activateSelectedProfile(); return true     // Return
+            default: model.closeMenu()
+            }
+        }
+
+        // Tile menu owns Up/Down/Enter/Esc while it's open, plus Right on a
+        // Chrome cell (profile submenu). Every other key dismisses it and
+        // then does its normal job.
         if model.menuOpen {
+            let items = model.menuItems
+            let selected = items.indices.contains(model.menuSelection)
+                ? items[model.menuSelection] : nil
             switch event.keyCode {
             case 53: model.closeMenu(); return true              // Esc
             case 125: model.moveMenuSelection(1); return true    // Down
             case 126: model.moveMenuSelection(-1); return true   // Up
             case 36, 76: activateSelectedMenuItem(); return true // Return
+            case 124 where selected.map(model.profileSubmenuAvailable) == true:
+                model.openSubmenu(); return true                 // Right on Chrome
+            case 124:
+                Log.switcher.notice("Right in menu, selection \(self.model.menuSelection, privacy: .public) item \(selected?.id ?? "none", privacy: .public) bundle \(selected?.launchApp?.bundleID ?? "-", privacy: .public): submenu unavailable")
+                model.closeMenu()
             default: model.closeMenu()
             }
         }
@@ -559,6 +698,7 @@ struct SwitcherView: View {
     @ObservedObject var previews: PreviewStore
     var onPick: (Int) -> Void
     var onMenuPick: (TileMenuItem) -> Void
+    var onProfilePick: (QuickLaunchApp, ChromeProfiles.Profile) -> Void
     /// Right-click path: the target tile comes from the gesture, not from
     /// `model.menuFor`, which only the Down-menu sets.
     var onMoveWindow: (MovableWindow, SpaceItem) -> Void
@@ -705,10 +845,10 @@ struct SwitcherView: View {
                     menuCard
                         .offset(x: MenuMetrics.xOffset(pos: model.highlight,
                                                        tiles: model.filtered.count),
-                                y: MenuMetrics.cardHeight(
-                                        apps: model.menuItems.compactMap(\.launchApp).count,
-                                        extraRows: model.menuItems.compactMap(\.movableWindow).count)
-                                    + MenuMetrics.gap + TileMetrics.footerHeight)
+                                y: menuCardHeight + MenuMetrics.gap + TileMetrics.footerHeight)
+                    if let profiles = model.submenuProfiles, let app = model.submenuApp {
+                        submenuCard(app: app, profiles: profiles)
+                    }
                 }
             }
             // The header is wider than a filtered-down row; without this the
@@ -729,14 +869,122 @@ struct SwitcherView: View {
             .padding(.horizontal, 8.5) // keeps the ~18pt tile gap
     }
 
+    /// Shared by the card's frame and the overlay's offset — the two must
+    /// agree or the card drifts off its tile.
+    private var menuCardHeight: CGFloat {
+        let items = model.menuItems
+        return MenuMetrics.cardHeight(apps: items.compactMap(\.launchApp).count,
+                                      extraRows: items.compactMap(\.movableWindow).count)
+    }
+
     /// Floating satellite card for the highlighted tile: a Rename row, an
     /// optional "Move ‹app› window here" row, then the quick-launch apps as a
     /// centered icon strip under an "Open in" label. The label names the
     /// selected app — the icons carry no text, so keyboard navigation needs
     /// the name somewhere. Selection index 0 is Rename; the move row, when
     /// present, is 1, which is what shifts the apps to `pos + appBase`.
+    /// A Chrome cell (profile targeting on, profiles found) carries a trailing
+    /// chevron; Right on it opens the profile submenu as a second card that
+    /// cascades to the right of this one, its top aligned with the Chrome
+    /// cell, flipping to the left when it would run off the screen edge.
+    /// This card is unchanged while it's open.
     private var menuCard: some View {
-        let accent = model.menuFor?.accentColor ?? .secondary
+        menuContent(accent: model.menuFor?.accentColor ?? .secondary)
+            .font(.system(size: 15))
+            .padding(MenuMetrics.inset)
+            // Pinned to the computed height the overlay offset uses, so the card
+            // drawn and the card the layout math positions can't drift apart.
+            .frame(width: MenuMetrics.width, height: menuCardHeight, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.thinMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12)))
+                    .shadow(color: .black.opacity(0.4), radius: 14, y: 5)
+            )
+    }
+
+    /// Profile submenu card, positioned from the same `.bottomLeading` anchor
+    /// as the menu card. With that anchor `.offset(y:)` moves a card's bottom
+    /// edge y below the row's bottom, so the menu card's top sits at
+    /// rowBottom + gap + footerHeight. Putting this card's top at that plus
+    /// the Chrome cell's `appCellTop` means an offset of
+    /// gap + footerHeight + appCellTop + submenuHeight.
+    private func submenuCard(app: QuickLaunchApp, profiles: [ChromeProfiles.Profile]) -> some View {
+        let items = model.menuItems
+        let cellPos = items.compactMap(\.launchApp).firstIndex { $0.id == app.id } ?? 0
+        let extraRows = items.compactMap(\.movableWindow).count
+        let height = MenuMetrics.submenuHeight(profiles: profiles.count)
+        let y = MenuMetrics.gap + TileMetrics.footerHeight
+            + MenuMetrics.appCellTop(pos: cellPos, extraRows: extraRows) + height
+        let x = MenuMetrics.submenuXOffset(pos: model.highlight,
+                                           tiles: model.filtered.count,
+                                           stageWidth: NSScreen.main?.visibleFrame.width ?? 0)
+        return submenuContent(app: app, profiles: profiles,
+                              accent: model.menuFor?.accentColor ?? .secondary)
+            .font(.system(size: 13))
+            .padding(MenuMetrics.inset)
+            .frame(width: MenuMetrics.submenuWidth, height: height, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.thinMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12)))
+                    .shadow(color: .black.opacity(0.4), radius: 14, y: 5)
+            )
+            .offset(x: x, y: y)
+    }
+
+    /// "Open in profile" label, then one row per discovered profile (name
+    /// over email). The entry's configured default carries a check.
+    private func submenuContent(app: QuickLaunchApp, profiles: [ChromeProfiles.Profile],
+                                accent: Color) -> some View {
+        VStack(spacing: 0) {
+            Text("Open in profile")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: MenuMetrics.labelHeight)
+
+            ForEach(Array(profiles.enumerated()), id: \.element.id) { pos, profile in
+                HStack(spacing: 10) {
+                    Image(systemName: "person.crop.circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(profile.name)
+                            .font(.system(size: 13))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let email = profile.email {
+                            Text(email)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if app.chromeProfile == profile.directory {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 11)
+                .frame(height: MenuMetrics.profileRowHeight)
+                .background(RoundedRectangle(cornerRadius: 7)
+                    .fill(model.submenuSelection == pos ? accent.opacity(0.28) : .clear))
+                .contentShape(Rectangle())
+                .onTapGesture { onProfilePick(app, profile) }
+                .onHover { if $0 { model.submenuSelection = pos } }
+            }
+        }
+    }
+
+    private func menuContent(accent: Color) -> some View {
         let apps: [QuickLaunchApp] = model.menuItems.compactMap(\.launchApp)
         let moveWindow: MovableWindow? = model.menuItems.compactMap(\.movableWindow).first
         let appBase = 1 + (moveWindow == nil ? 0 : 1)
@@ -817,6 +1065,14 @@ struct SwitcherView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: MenuMetrics.appCellHeight)
+                    .overlay(alignment: .trailing) {
+                        if model.profileSubmenuAvailable(for: .launch(app)) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                                .padding(.trailing, 6)
+                        }
+                    }
                     .background(RoundedRectangle(cornerRadius: 7)
                         .fill(selected ? accent.opacity(0.28) : .clear))
                     .contentShape(Rectangle())
@@ -825,21 +1081,6 @@ struct SwitcherView: View {
                 }
             }
         }
-        .font(.system(size: 15))
-        .padding(MenuMetrics.inset)
-        // Pinned to the computed height the overlay offset uses, so the card
-        // drawn and the card the layout math positions can't drift apart.
-        .frame(width: MenuMetrics.width,
-               height: MenuMetrics.cardHeight(apps: apps.count,
-                                              extraRows: moveWindow == nil ? 0 : 1),
-               alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.thinMaterial)
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.12)))
-                .shadow(color: .black.opacity(0.4), radius: 14, y: 5)
-        )
     }
 
     private var editBar: some View {

@@ -119,7 +119,7 @@ final class QuickLauncher {
         // puts them (pre-feature behavior).
         let profileDir: String? = {
             guard settings.chromeProfilesEnabled, let dir = app.chromeProfile,
-                  ChromeProfiles.exists(dir) else { return nil }
+                  settings.chromeProfileExists(dir) else { return nil }
             return dir
         }()
         if settings.windowPlacementEnabled, let spec = app.placement,

@@ -41,7 +41,6 @@ final class PreferencesController {
 
 struct PreferencesView: View {
     @ObservedObject var settings: Settings
-    private let profiles = ChromeProfiles.load()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -53,10 +52,12 @@ struct PreferencesView: View {
             Text("Both off = plain launches, exactly as before these features existed.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
 
+            chromeProfilesSection
+
             Divider()
 
             ForEach($settings.quickLaunch) { $app in
-                QuickLaunchRow(app: $app, profiles: profiles,
+                QuickLaunchRow(app: $app, profiles: settings.chromeProfiles,
                                profilesEnabled: settings.chromeProfilesEnabled,
                                placementEnabled: settings.windowPlacementEnabled,
                                onDelete: {
@@ -68,6 +69,35 @@ struct PreferencesView: View {
         }
         .padding(20)
         .frame(width: 560)
+    }
+
+    /// Snapshot of Chrome's profiles. Chrome's folder is read only when the
+    /// user clicks Refresh — never at runtime.
+    private var chromeProfilesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Chrome profiles")
+            HStack(spacing: 8) {
+                Text(settings.chromeProfiles.isEmpty
+                     ? "No profiles yet"
+                     : "Profiles found: \(settings.chromeProfiles.count)")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Refresh from Chrome") { settings.refreshChromeProfiles() }
+            }
+            Text("Reading Chrome's profile list may ask for permission to access Chrome's data. Nothing else is read.")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+            if !settings.chromeProfiles.isEmpty {
+                ForEach($settings.chromeProfiles) { $profile in
+                    Toggle(profile.label, isOn: $profile.enabled)
+                }
+                Text("Enabled profiles appear in the switcher's profile submenu (Right on the Chrome cell).")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+        .disabled(!settings.chromeProfilesEnabled)
     }
 
     private func addApp() {
@@ -113,8 +143,14 @@ struct QuickLaunchRow: View {
             }
 
             if isChrome, !profiles.isEmpty {
+                // A stored profile missing from the snapshot shows as the
+                // default rather than an untagged (blank) selection.
                 Picker("Profile", selection: Binding(
-                    get: { app.chromeProfile ?? "" },
+                    get: {
+                        guard let dir = app.chromeProfile,
+                              profiles.contains(where: { $0.directory == dir }) else { return "" }
+                        return dir
+                    },
                     set: { app.chromeProfile = $0.isEmpty ? nil : $0 }
                 )) {
                     Text("Last used (default)").tag("")

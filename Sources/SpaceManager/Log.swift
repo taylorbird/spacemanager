@@ -17,6 +17,7 @@ enum Log {
     static let preview = Logger(subsystem: subsystem, category: "preview")
     static let switcher = Logger(subsystem: subsystem, category: "switcher")
     static let watchdog = Logger(subsystem: subsystem, category: "watchdog")
+    static let chrome = Logger(subsystem: subsystem, category: "chrome")
 }
 
 extension CGPoint {

@@ -35,6 +35,17 @@ names, visibility, a fast switcher, and per-space automations.</p>
   System Settings → Keyboard Shortcuts → Mission Control)
 - **Screen Recording** permission (optional — enables live space previews in the
   switcher; previews are session-only, in-memory screenshots)
+- **Access to Chrome's data** (optional — only for Chrome profile targeting).
+  Space Manager reads Chrome's profile list once, when you click
+  **Refresh from Chrome** in Preferences; it never reads Chrome's folder at
+  any other time. On macOS 27 that read is protected app data, so macOS shows
+  a **"data access blocked"** prompt on the first click — choose **Allow**.
+  If you dismissed or denied it earlier, no prompt appears again and Refresh
+  finds nothing. Clear the stored decision and click Refresh once more:
+
+  ```
+  tccutil reset SystemPolicyAppDataDetailed com.taylorbird.spacemanager
+  ```
 
 ## Building
 
