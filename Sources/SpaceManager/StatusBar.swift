@@ -171,6 +171,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             menu.addItem(setup)
         }
 
+        menu.addItem(sectionLabel(Self.versionLabel))
         menu.addItem(NSMenuItem(title: "Quit SpaceManager",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
@@ -229,6 +230,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         root.submenu = sub
         return root
     }
+
+    /// "Version 0.1.0 (42) · abc1234 · 2026-10-13 09:50", stamped by scripts/build-app.sh.
+    private static let versionLabel: String = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        var parts = ["Version \(short) (\(build))"]
+        if let commit = info["SMGitCommit"] as? String { parts.append(commit) }
+        if let date = info["SMBuildDate"] as? String { parts.append(date) }
+        return parts.joined(separator: " · ")
+    }()
 
     private func sectionLabel(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
