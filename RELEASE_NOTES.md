@@ -1,3 +1,3 @@
-## 0.1.1
+## 0.1.2
 
-- **App icon in launchers**: Spotlight, Monarch and other launchers now show the Space Manager icon instead of a blank placeholder.
+- **Quieter update reminders**: when Space Manager finds an update in the background, a small dot appears after the space name in the menu bar and the menu offers "Update to …", instead of an alert that could open behind other windows.
