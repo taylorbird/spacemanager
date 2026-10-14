@@ -37,7 +37,7 @@ if (( RELEASE )); then
 else
   NAME="Space Manager Dev"; BUNDLE_ID="$LIVE_ID.dev"
 fi
-APP="$ROOT/build/$NAME.app"
+APP="$ROOT/build.noindex/$NAME.app"
 
 # Build number = commit count (monotonic, numeric — what Sparkle compares).
 # Commit gets a -dirty suffix when the tree has uncommitted changes.
@@ -59,7 +59,7 @@ xcrun actool "$ROOT/assets/icon/AppIcon.icon" \
   --app-icon AppIcon --include-all-app-icons \
   --enable-on-demand-resources NO --development-region en \
   --target-device mac --platform macosx --minimum-deployment-target 14.0 \
-  --output-partial-info-plist "$ROOT/build/actool-partial.plist" \
+  --output-partial-info-plist "$ROOT/build.noindex/actool-partial.plist" \
   --output-format human-readable-text >/dev/null
 
 # Update keys only in the live build: a dev build must never update itself

@@ -3,7 +3,7 @@
 /spike/spike
 /spike/latency
 /.build/
-/build/
+/build.noindex/
 /dist/
 xcuserdata/
 *.xcodeproj

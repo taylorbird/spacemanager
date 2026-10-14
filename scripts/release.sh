@@ -63,7 +63,7 @@ echo "==> Packaging and notarizing"
 DMG="$ROOT/dist/SpaceManager-$V.dmg"
 
 echo "==> Generating appcast"
-FEED="$ROOT/build/appcast"
+FEED="$ROOT/build.noindex/appcast"
 rm -rf "$FEED"
 mkdir -p "$FEED"
 cp "$DMG" "$FEED/"

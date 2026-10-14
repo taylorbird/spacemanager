@@ -13,11 +13,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/build/Space Manager.app"
+APP="$ROOT/build.noindex/Space Manager.app"
 IDENTITY="Developer ID Application: Taylor Bird (UFCDGSKCXB)"
 PROFILE="notary"
 DMGBUILD_VERSION="1.6.7"
-VENV="$ROOT/build/dmgbuild-venv"
+VENV="$ROOT/build.noindex/dmgbuild-venv"
 
 ALLOW_DIRTY=0
 NOTARIZE=1
@@ -42,14 +42,14 @@ mkdir -p "$ROOT/dist"
 rm -f "$DMG"
 
 # dmgbuild writes the Finder window layout directly (no Finder scripting,
-# no Automation permission). Installed once into a venv under build/.
+# no Automation permission). Installed once into a venv under build.noindex/.
 if [[ ! -x "$VENV/bin/dmgbuild" ]]; then
   python3 -m venv "$VENV"
   "$VENV/bin/pip" install --quiet "dmgbuild==$DMGBUILD_VERSION"
 fi
 
 # HiDPI background: one TIFF holding the 1x and 2x renders.
-BACKGROUND="$ROOT/build/dmg-background.tiff"
+BACKGROUND="$ROOT/build.noindex/dmg-background.tiff"
 tiffutil -cathidpicheck "$ROOT/assets/dmg/background.png" "$ROOT/assets/dmg/background@2x.png" \
   -out "$BACKGROUND"
 
