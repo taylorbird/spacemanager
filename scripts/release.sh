@@ -31,10 +31,13 @@ git -C "$ROOT" rev-parse -q --verify "refs/tags/v$V" >/dev/null && die "tag v$V 
 [[ "$(head -1 "$ROOT/RELEASE_NOTES.md")" == "## $V" ]] ||
   die "rewrite RELEASE_NOTES.md for $V first (its first line must be \"## $V\")"
 [[ -x "$SPARKLE_BIN/generate_appcast" ]] || swift package --package-path "$ROOT" resolve
+xcrun notarytool history --keychain-profile notary >/dev/null 2>&1 ||
+  die "no notarytool profile \"notary\" (see the README's one-time setup)"
 
 # Pin gh to the personal account; the active gh account can drift between
-# work and personal mid-run.
-export GH_TOKEN="$(gh auth token --user taylorbird)"
+# work and personal mid-run. (git push goes over the SSH remote, not gh.)
+GH_TOKEN="$(gh auth token --user taylorbird)" || die "gh is not logged in as taylorbird"
+export GH_TOKEN
 
 echo "$V" > "$ROOT/VERSION"
 mkdir -p "$ROOT/release-notes"
@@ -44,7 +47,16 @@ git -C "$ROOT" commit -q -m "Release v$V"
 git -C "$ROOT" tag "v$V"
 echo "==> Committed and tagged v$V (local)"
 
-trap 'echo "release: failed after the local commit and tag. To retry: git tag -d v$V && git reset --hard HEAD~1" >&2' ERR
+PUSHED=0
+on_error() {
+  if (( PUSHED )); then
+    echo "release: failed after pushing main and v$V. Do not reset; finish by hand:" >&2
+    echo "  gh release create v$V dist/SpaceManager-$V.dmg dist/appcast.xml --repo $REPO --title \"Space Manager $V\" --notes-file RELEASE_NOTES.md --latest" >&2
+  else
+    echo "release: failed before pushing. To retry: git tag -d v$V && git reset --hard HEAD~1" >&2
+  fi
+}
+trap on_error ERR
 
 echo "==> Packaging and notarizing"
 "$ROOT/scripts/package-dmg.sh"
@@ -63,6 +75,7 @@ cp "$FEED/appcast.xml" "$ROOT/dist/appcast.xml"
 
 echo "==> Publishing"
 git -C "$ROOT" push origin main "v$V"
+PUSHED=1
 gh release create "v$V" "$DMG" "$ROOT/dist/appcast.xml" --repo "$REPO" \
   --title "Space Manager $V" --notes-file "$ROOT/RELEASE_NOTES.md" --latest
 trap - ERR

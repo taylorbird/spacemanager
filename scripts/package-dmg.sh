@@ -5,7 +5,7 @@
 #
 # Notarization needs a keychain profile named "notary", created once with:
 #   xcrun notarytool store-credentials notary --apple-id <apple-id> --team-id UFCDGSKCXB
-# Without it the DMG is built and signed but not notarized.
+# Without it the script fails after signing, unless --no-notarize was passed.
 #
 # Refuses to run on a dirty tree (the build would be stamped -dirty);
 # pass --allow-dirty to override. --no-notarize stops after signing (for
@@ -51,7 +51,7 @@ fi
 # HiDPI background: one TIFF holding the 1x and 2x renders.
 BACKGROUND="$ROOT/build/dmg-background.tiff"
 tiffutil -cathidpicheck "$ROOT/assets/dmg/background.png" "$ROOT/assets/dmg/background@2x.png" \
-  -out "$BACKGROUND" 2>/dev/null
+  -out "$BACKGROUND"
 
 "$VENV/bin/dmgbuild" -s "$ROOT/scripts/dmg-settings.py" \
   -D app="$APP" -D background="$BACKGROUND" "Space Manager" "$DMG"
@@ -60,9 +60,10 @@ echo "Built and signed: $DMG"
 (( NOTARIZE )) || exit 0
 
 if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
-  echo "No notarytool profile \"$PROFILE\"; skipping notarization. Create it with:" >&2
+  echo "No notarytool profile \"$PROFILE\"; the DMG is signed but NOT notarized. Create it with:" >&2
   echo "  xcrun notarytool store-credentials $PROFILE --apple-id <apple-id> --team-id UFCDGSKCXB" >&2
-  exit 0
+  echo "or pass --no-notarize to build an un-notarized DMG on purpose." >&2
+  exit 1
 fi
 
 # The ticket covers the DMG and the app inside it.
