@@ -1,0 +1,29 @@
+{
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "icon-mark.png",
+          "name" : "mark"
+        },
+        {
+          "glass" : false,
+          "image-name" : "icon-backing.png",
+          "name" : "backing"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}

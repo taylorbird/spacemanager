@@ -172,7 +172,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(sectionLabel(Self.versionLabel))
-        menu.addItem(NSMenuItem(title: "Quit SpaceManager",
+        menu.addItem(NSMenuItem(title: "Quit Space Manager",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 

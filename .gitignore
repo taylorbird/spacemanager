@@ -4,6 +4,7 @@
 /spike/latency
 /.build/
 /build/
+/dist/
 xcuserdata/
 *.xcodeproj
 
