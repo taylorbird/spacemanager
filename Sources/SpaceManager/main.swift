@@ -101,6 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
 
+        updater.onPendingChange = { [weak self] version in self?.statusBar.pendingUpdate = version }
+
         // Real arrivals: HUD + on-arrive actions + full-screen label capture.
         engine.onArrive = { [weak self] info, index in
             guard let self else { return }

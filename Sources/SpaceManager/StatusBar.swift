@@ -53,7 +53,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         button.image = spaceIcon(number: current?.number)
         button.imagePosition = .imageLeading
         // NSButton exposes no image/title spacing; a leading space is the gap.
-        button.title = " " + (current?.menuLabel ?? "Spaces")
+        // A trailing dot is the gentle reminder for a background-found update.
+        button.title = " " + (current?.menuLabel ?? "Spaces") + (pendingUpdate != nil ? " •" : "")
+    }
+
+    /// Version of an update found in the background and not yet seen; set by
+    /// the Updater. Shows as a dot on the status item and a top menu row.
+    var pendingUpdate: String? {
+        didSet { updateTitle() }
     }
 
     // MARK: Status item icon
@@ -106,6 +113,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         viewModel.engine.refresh()
         setupStatus.recheck()
         menu.removeAllItems()
+
+        if let version = pendingUpdate, handlers.checkForUpdates != nil {
+            let update = NSMenuItem(title: "Update to \(version)…", action: #selector(checkForUpdates),
+                                    keyEquivalent: "")
+            update.target = self
+            menu.addItem(update)
+            menu.addItem(.separator())
+        }
 
         for item in viewModel.items {
             let mi = NSMenuItem(title: "\(item.number)  \(item.menuLabel)",
