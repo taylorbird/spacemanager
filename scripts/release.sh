@@ -32,7 +32,7 @@ git -C "$ROOT" rev-parse -q --verify "refs/tags/v$V" >/dev/null && die "tag v$V 
   die "rewrite RELEASE_NOTES.md for $V first (its first line must be \"## $V\")"
 [[ -x "$SPARKLE_BIN/generate_appcast" ]] || swift package --package-path "$ROOT" resolve
 xcrun notarytool history --keychain-profile notary >/dev/null 2>&1 ||
-  die "no notarytool profile \"notary\" (see the README's one-time setup)"
+  die "notarytool profile \"notary\" missing, or Apple unreachable (see the README's one-time setup)"
 
 # Pin gh to the personal account; the active gh account can drift between
 # work and personal mid-run. (git push goes over the SSH remote, not gh.)
@@ -51,7 +51,7 @@ PUSHED=0
 on_error() {
   if (( PUSHED )); then
     echo "release: failed after pushing main and v$V. Do not reset; finish by hand:" >&2
-    echo "  gh release create v$V dist/SpaceManager-$V.dmg dist/appcast.xml --repo $REPO --title \"Space Manager $V\" --notes-file RELEASE_NOTES.md --latest" >&2
+    echo "  gh release create v$V \"$ROOT/dist/SpaceManager-$V.dmg\" \"$ROOT/dist/appcast.xml\" --repo $REPO --title \"Space Manager $V\" --notes-file \"$ROOT/RELEASE_NOTES.md\" --latest" >&2
   else
     echo "release: failed before pushing. To retry: git tag -d v$V && git reset --hard HEAD~1" >&2
   fi
@@ -74,7 +74,7 @@ cp "$ROOT/RELEASE_NOTES.md" "$FEED/SpaceManager-$V.md"
 cp "$FEED/appcast.xml" "$ROOT/dist/appcast.xml"
 
 echo "==> Publishing"
-git -C "$ROOT" push origin main "v$V"
+git -C "$ROOT" push --atomic origin main "v$V"
 PUSHED=1
 gh release create "v$V" "$DMG" "$ROOT/dist/appcast.xml" --repo "$REPO" \
   --title "Space Manager $V" --notes-file "$ROOT/RELEASE_NOTES.md" --latest
