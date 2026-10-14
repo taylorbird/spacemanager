@@ -47,15 +47,51 @@ names, visibility, a fast switcher, and per-space automations.</p>
   tccutil reset SystemPolicyAppDataDetailed com.taylorbird.spacemanager
   ```
 
-## Building
+## Install
+
+Download `SpaceManager-<version>.dmg` from the
+[latest release](https://github.com/taylorbird/spacemanager/releases/latest), open it, and drag
+Space Manager to Applications. It has to run from `/Applications`: on macOS 27 the menu bar only
+handles items correctly for apps launched from there. Updates arrive in the app (menu bar item →
+Check for Updates…).
+
+## Development
+
+Two builds live side by side, with separate bundle IDs, settings and permissions:
+
+| | Live | Dev |
+|---|---|---|
+| App | `/Applications/Space Manager.app` | `/Applications/Space Manager Dev.app` |
+| Bundle ID | `com.taylorbird.spacemanager` | `com.taylorbird.spacemanager.dev` |
+| Comes from | release DMG, updated by Sparkle | `scripts/build-app.sh` |
+
+Only one runs at a time, since both hook the same space switches, HUD and hotkey.
 
 ```sh
-scripts/build-app.sh
+scripts/build-app.sh      # build dev, quit live, install + launch dev
+scripts/use-live.sh       # quit dev, relaunch live
 ```
 
-Builds the release binary with Swift Package Manager, assembles
-`build/SpaceManager.app`, and codesigns it. Signing with a stable Developer ID
-preserves the TCC permission grants across rebuilds.
+The dev build needs its own Accessibility and Screen Recording grants the first time. It starts
+with empty settings; to copy the live ones over (with both quit):
+`defaults export com.taylorbird.spacemanager - | defaults import com.taylorbird.spacemanager.dev -`
+
+Signing with a stable Developer ID keeps the permission grants across rebuilds. The menu's
+version line names the build, its commit, and when it was built.
+
+## Releasing
+
+```sh
+scripts/release.sh 0.2.0
+```
+
+First rewrite `RELEASE_NOTES.md` with `## 0.2.0` as its first line. The script commits and tags,
+builds the live app, packages a notarized DMG (`scripts/package-dmg.sh`), signs the update feed
+with the Sparkle key in the login keychain, then pushes and publishes the GitHub release.
+One-time setup on a new machine:
+
+- `xcrun notarytool store-credentials notary --apple-id <apple-id> --team-id UFCDGSKCXB`
+- import the Sparkle signing key: `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account spacemanager -f <backup-file>`
 
 ## Design constraints
 

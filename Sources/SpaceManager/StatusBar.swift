@@ -12,6 +12,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         var openPreferences: () -> Void
         var openSetup: () -> Void
         var runAction: (SpaceAction) -> Void
+        /// Nil on dev builds, which have no update feed.
+        var checkForUpdates: (() -> Void)?
     }
 
     private let statusItem: NSStatusItem
@@ -152,6 +154,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         prefs.target = self
         menu.addItem(prefs)
 
+        if handlers.checkForUpdates != nil {
+            let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates),
+                                     keyEquivalent: "")
+            updates.target = self
+            menu.addItem(updates)
+        }
+
         menu.addItem(.separator())
 
         let replay = NSMenuItem(title: "Replay Arrival HUD", action: #selector(replay), keyEquivalent: "")
@@ -231,12 +240,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return root
     }
 
-    /// "Version 0.1.0 (42) · abc1234 · 2026-10-13 09:50", stamped by scripts/build-app.sh.
+    /// "Space Manager Dev 0.1.0 (42) · abc1234 · 2026-10-13 09:50", stamped by
+    /// scripts/build-app.sh. The name tells the live and dev builds apart.
     private static let versionLabel: String = {
         let info = Bundle.main.infoDictionary ?? [:]
+        let name = info["CFBundleName"] as? String ?? "Space Manager"
         let short = info["CFBundleShortVersionString"] as? String ?? "?"
         let build = info["CFBundleVersion"] as? String ?? "?"
-        var parts = ["Version \(short) (\(build))"]
+        var parts = ["\(name) \(short) (\(build))"]
         if let commit = info["SMGitCommit"] as? String { parts.append(commit) }
         if let date = info["SMBuildDate"] as? String { parts.append(date) }
         return parts.joined(separator: " · ")
@@ -257,6 +268,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func openSwitcher() { handlers.toggleSwitcher() }
     @objc private func replay() { handlers.replayHUD() }
     @objc private func openSetup() { handlers.openSetup() }
+    @objc private func checkForUpdates() { handlers.checkForUpdates?() }
     @objc private func editActions(_ sender: NSMenuItem) { handlers.editActions() }
     @objc private func openPreferences(_ sender: NSMenuItem) { handlers.openPreferences() }
 

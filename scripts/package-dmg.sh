@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Package a release DMG: build-app.sh (no launch) → drag-install DMG with an
-# Applications shortcut → sign → notarize → staple → Gatekeeper check.
+# Package the live build as a release DMG: build-app.sh --release → DMG with
+# a designed window (dmgbuild) → sign → notarize → staple → Gatekeeper check.
 # Output: dist/SpaceManager-<version>.dmg
 #
 # Notarization needs a keychain profile named "notary", created once with:
@@ -8,33 +8,56 @@
 # Without it the DMG is built and signed but not notarized.
 #
 # Refuses to run on a dirty tree (the build would be stamped -dirty);
-# pass --allow-dirty to override.
+# pass --allow-dirty to override. --no-notarize stops after signing (for
+# checking the DMG window without a round-trip to Apple).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/Space Manager.app"
 IDENTITY="Developer ID Application: Taylor Bird (UFCDGSKCXB)"
 PROFILE="notary"
+DMGBUILD_VERSION="1.6.7"
+VENV="$ROOT/build/dmgbuild-venv"
 
-if [[ "${1:-}" != "--allow-dirty" && -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+ALLOW_DIRTY=0
+NOTARIZE=1
+for arg in "$@"; do
+  case "$arg" in
+    --allow-dirty) ALLOW_DIRTY=1 ;;
+    --no-notarize) NOTARIZE=0 ;;
+    *) echo "Unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
+if (( ! ALLOW_DIRTY )) && [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
   echo "Working tree has uncommitted changes; commit first or pass --allow-dirty." >&2
   exit 1
 fi
 
-"$ROOT/scripts/build-app.sh" --no-launch
+"$ROOT/scripts/build-app.sh" --release
 
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+VERSION="$(<"$ROOT/VERSION")"
 DMG="$ROOT/dist/SpaceManager-$VERSION.dmg"
-STAGE="$ROOT/build/dmg"
+mkdir -p "$ROOT/dist"
+rm -f "$DMG"
 
-rm -rf "$STAGE" "$DMG"
-mkdir -p "$STAGE" "$ROOT/dist"
-ditto "$APP" "$STAGE/Space Manager.app"
-ln -s /Applications "$STAGE/Applications"
+# dmgbuild writes the Finder window layout directly (no Finder scripting,
+# no Automation permission). Installed once into a venv under build/.
+if [[ ! -x "$VENV/bin/dmgbuild" ]]; then
+  python3 -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet "dmgbuild==$DMGBUILD_VERSION"
+fi
 
-hdiutil create -volname "Space Manager" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+# HiDPI background: one TIFF holding the 1x and 2x renders.
+BACKGROUND="$ROOT/build/dmg-background.tiff"
+tiffutil -cathidpicheck "$ROOT/assets/dmg/background.png" "$ROOT/assets/dmg/background@2x.png" \
+  -out "$BACKGROUND" 2>/dev/null
+
+"$VENV/bin/dmgbuild" -s "$ROOT/scripts/dmg-settings.py" \
+  -D app="$APP" -D background="$BACKGROUND" "Space Manager" "$DMG"
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 echo "Built and signed: $DMG"
+(( NOTARIZE )) || exit 0
 
 if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
   echo "No notarytool profile \"$PROFILE\"; skipping notarization. Create it with:" >&2

@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let peek = TraversalPeek()
     let previews = PreviewStore()
     let watchdog = MainThreadWatchdog()
+    let updater = Updater()
     /// Last predicted destination during a Ctrl+arrow traversal; reset on landing.
     private var peekIndex: Int?
     /// Prevents preview captures from piling up during rapid switching —
@@ -95,7 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 editActions: { [weak self] in self?.actionsEditor.show() },
                 openPreferences: { [weak self] in self?.preferences.show() },
                 openSetup: { [weak self] in self?.setupGuide.show() },
-                runAction: { [weak self] action in self?.runner.runManually(action) }
+                runAction: { [weak self] action in self?.runner.runManually(action) },
+                checkForUpdates: updater.isAvailable ? { [weak self] in self?.updater.checkForUpdates() } : nil
             )
         )
 
