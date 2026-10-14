@@ -113,6 +113,12 @@ PLIST
 cp "$ROOT/.build/release/SpaceManager" "$APP/Contents/MacOS/SpaceManager"
 ditto "$ROOT/.build/release/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
+# Replace actool's .icns (sizes up to 256px only) with a full 16–1024 set
+# rendered from the bundle's own Liquid Glass icon; launchers that read the
+# .icns (Monarch) otherwise show a blank placeholder. Needs Info.plist and
+# Assets.car in place, so it runs here.
+swift "$ROOT/scripts/render-icns.swift" "$APP" "$APP/Contents/Resources/AppIcon.icns"
+
 # Sign inside-out with hardened runtime + secure timestamp (notarization needs
 # both). Sparkle's helpers must carry our signature too; the Downloader keeps
 # its own entitlements (Sparkle's documented recipe for Developer ID apps).
