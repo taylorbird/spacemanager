@@ -1,3 +1,4 @@
-## 0.1.2
+## 0.1.3
 
-- **Quieter update reminders**: when Space Manager finds an update in the background, a small dot appears after the space name in the menu bar and the menu offers "Update to …", instead of an alert that could open behind other windows.
+- **Switcher fits your screen**: with many spaces on a smaller display (8–9 on a 14" MacBook Pro), the switcher's tiles shrink to fit instead of running into the screen edges. On wider screens nothing changes.
+- **Setup window stays out of the way**: it opens centered on the space you're on, and no longer floats over the System Settings panes and permission prompts it sends you to.
