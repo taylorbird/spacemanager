@@ -21,13 +21,25 @@ final class SetupGuideController {
                              backing: .buffered, defer: false)
             w.title = "SpaceManager Setup"
             w.isReleasedWhenClosed = false
-            w.level = .floating
-            w.contentView = NSHostingView(rootView: SetupGuideView(status: status, viewModel: viewModel))
+            // Normal level, not floating: every button here sends the user to
+            // System Settings or a macOS permission prompt, which must be able
+            // to come to the front over this window.
+            // Follow the user: without this the window stays on the space it
+            // first opened on, and reopening it from another space shows nothing.
+            w.collectionBehavior = [.moveToActiveSpace]
+            let host = NSHostingView(rootView: SetupGuideView(status: status, viewModel: viewModel))
+            w.contentView = host
+            // Size before centering — centered at zero size, it parks off-center.
+            host.layoutSubtreeIfNeeded()
+            w.setContentSize(host.fittingSize)
             w.center()
             window = w
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        if let window {
+            Log.setup.notice("setup guide shown, frame \(window.frame.logDescription, privacy: .public)")
+        }
     }
 }
 
