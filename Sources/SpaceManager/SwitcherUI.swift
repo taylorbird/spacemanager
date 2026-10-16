@@ -5,10 +5,15 @@ import SwiftUI
 
 /// Tile row geometry. Shared so the context menu can sit exactly under the
 /// tile it belongs to — the layout is fixed-size, so this stays exact.
-enum TileMetrics {
-    static let thumb = CGSize(width: 184, height: 113)
+/// Only the preview (and what's drawn over it) scales: `fitting` shrinks it
+/// when the full row would run past the screen, e.g. 8–9 spaces on a laptop.
+/// Text, padding and gaps keep their size; the scale never exceeds 1.
+struct TileMetrics: Equatable {
+    var scale: CGFloat = 1
+
+    static let full = TileMetrics()
+    static let designThumb = CGSize(width: 184, height: 113)
     static let hPadding: CGFloat = 10
-    static let width = thumb.width + hPadding * 2
     /// Divider (1pt) plus its 8.5pt padding either side.
     static let gap: CGFloat = 18
     static let rowInset: CGFloat = 16
@@ -16,9 +21,43 @@ enum TileMetrics {
     /// between the tiles row and the panel's bottom edge. Tall enough that
     /// hints float clear of the panel edge instead of hugging it.
     static let footerHeight: CGFloat = 28
+    /// Per side: the panel's 30pt shadow padding inside the stage, plus
+    /// clearance so the panel never meets the screen edge.
+    static let stageMargin: CGFloat = 30 + 24
+    /// Below this the numerals and previews stop reading; past it the row
+    /// is allowed to overflow rather than shrink further.
+    static let minScale: CGFloat = 0.5
 
-    static func leadingOffset(pos: Int) -> CGFloat {
-        rowInset + CGFloat(pos) * (width + gap)
+    var thumb: CGSize {
+        // Down, so a fitted row never rounds past the width it was fitted to.
+        CGSize(width: (Self.designThumb.width * scale).rounded(.down),
+               height: (Self.designThumb.height * scale).rounded(.down))
+    }
+    var width: CGFloat { thumb.width + Self.hPadding * 2 }
+    /// Divider height: preview plus the name line under it (138pt at full size).
+    var dividerHeight: CGFloat { thumb.height + 25 }
+    /// 107pt ≈ 77pt cap height: ~68% of the preview height.
+    var numeralSize: CGFloat { (107 * scale).rounded() }
+
+    func leadingOffset(pos: Int) -> CGFloat {
+        Self.rowInset + CGFloat(pos) * (width + Self.gap)
+    }
+
+    func rowWidth(tiles: Int) -> CGFloat {
+        CGFloat(tiles) * width
+            + CGFloat(max(0, tiles - 1)) * Self.gap
+            + Self.rowInset * 2
+    }
+
+    /// The largest scale (capped at 1) at which `tiles` tiles fit a stage
+    /// `stageWidth` wide.
+    static func fitting(tiles: Int, stageWidth: CGFloat) -> TileMetrics {
+        guard tiles > 0, stageWidth > 0 else { return .full }
+        let n = CGFloat(tiles)
+        let fixed = n * hPadding * 2 + (n - 1) * gap + rowInset * 2
+        let available = stageWidth - stageMargin * 2 - fixed
+        let scale = available / (n * designThumb.width)
+        return TileMetrics(scale: min(1, max(minScale, scale)))
     }
 }
 
@@ -73,20 +112,17 @@ enum MenuMetrics {
 
     /// Tiles row width including its inset — shared by the card and submenu
     /// x math.
-    static func rowWidth(tiles: Int) -> CGFloat {
-        CGFloat(tiles) * TileMetrics.width
-            + CGFloat(max(0, tiles - 1)) * TileMetrics.gap
-            + TileMetrics.rowInset * 2
+    static func rowWidth(tiles: Int, tile: TileMetrics = .full) -> CGFloat {
+        tile.rowWidth(tiles: tiles)
     }
 
     /// Card centered under the highlighted tile, clamped to the row's edges
     /// so an end tile's card tucks inward (popover-style) instead of
     /// overhanging the panel. A card wider than the whole row centers on it.
-    static func xOffset(pos: Int, tiles: Int) -> CGFloat {
-        let rowWidth = rowWidth(tiles: tiles)
+    static func xOffset(pos: Int, tiles: Int, tile: TileMetrics = .full) -> CGFloat {
+        let rowWidth = rowWidth(tiles: tiles, tile: tile)
         guard width <= rowWidth else { return (rowWidth - width) / 2 }
-        let centered = TileMetrics.leadingOffset(pos: pos)
-            + (TileMetrics.width - width) / 2
+        let centered = tile.leadingOffset(pos: pos) + (tile.width - width) / 2
         return min(max(centered, 0), rowWidth - width)
     }
 
@@ -94,10 +130,11 @@ enum MenuMetrics {
     /// anchor `xOffset` uses): right of the menu card, or left of it when
     /// the right placement would come within `screenMargin` of the screen
     /// edge. The row is centered in a stage `stageWidth` wide.
-    static func submenuXOffset(pos: Int, tiles: Int, stageWidth: CGFloat) -> CGFloat {
-        let menuX = xOffset(pos: pos, tiles: tiles)
+    static func submenuXOffset(pos: Int, tiles: Int, stageWidth: CGFloat,
+                               tile: TileMetrics = .full) -> CGFloat {
+        let menuX = xOffset(pos: pos, tiles: tiles, tile: tile)
         let right = menuX + width + submenuGap
-        let rowLeading = (stageWidth - rowWidth(tiles: tiles)) / 2
+        let rowLeading = (stageWidth - rowWidth(tiles: tiles, tile: tile)) / 2
         guard rowLeading + right + submenuWidth > stageWidth - screenMargin else { return right }
         return menuX - submenuGap - submenuWidth
     }
@@ -161,6 +198,10 @@ final class SwitcherModel: ObservableObject {
     /// per open, because "frontmost" stops meaning anything useful the moment
     /// the panel is up.
     @Published var movable: MovableWindow?
+
+    /// Tile size for this open, fitted to the screen and the total space
+    /// count — not the filtered count, so tiles don't resize while typing.
+    @Published var tile = TileMetrics.full
 
     let viewModel: SpacesViewModel
     let metadata: MetadataStore
@@ -453,6 +494,7 @@ final class SwitcherController {
             // room — the card is drawn inside this window and would be
             // clipped by a shorter one. Transparent areas pass clicks through.
             let f = screen.visibleFrame
+            model.tile = .fitting(tiles: viewModel.items.count, stageWidth: f.width)
             let top = f.maxY - f.height * Self.topInset
             panel.setFrame(NSRect(x: f.minX, y: f.minY,
                                   width: f.width, height: top - f.minY),
@@ -461,7 +503,7 @@ final class SwitcherController {
         isOpen = true
         panel.ignoresMouseEvents = false
         panel.makeKeyAndOrderFront(nil)
-        Log.switcher.notice("opened, panel frame \(self.panel.frame.logDescription, privacy: .public) (Cocoa coordinates)")
+        Log.switcher.notice("opened, panel frame \(self.panel.frame.logDescription, privacy: .public) (Cocoa coordinates), tile scale \(self.model.tile.scale, privacy: .public)")
     }
 
     func close() {
@@ -816,6 +858,7 @@ struct SwitcherView: View {
                 ForEach(Array(filtered.enumerated()), id: \.element.id) { pos, item in
                     if pos > 0 { tileDivider }
                     SwitcherTile(item: item,
+                                 metrics: model.tile,
                                  preview: previews.image(for: item.uuid),
                                  isCurrent: item.index == model.viewModel.currentIndex,
                                  isHighlighted: pos == model.highlight,
@@ -844,7 +887,8 @@ struct SwitcherView: View {
                 if model.menuOpen {
                     menuCard
                         .offset(x: MenuMetrics.xOffset(pos: model.highlight,
-                                                       tiles: model.filtered.count),
+                                                       tiles: model.filtered.count,
+                                                       tile: model.tile),
                                 y: menuCardHeight + MenuMetrics.gap + TileMetrics.footerHeight)
                     if let profiles = model.submenuProfiles, let app = model.submenuApp {
                         submenuCard(app: app, profiles: profiles)
@@ -865,7 +909,7 @@ struct SwitcherView: View {
             .fill(LinearGradient(
                 colors: [.clear, .white.opacity(0.18), .white.opacity(0.18), .clear],
                 startPoint: .top, endPoint: .bottom))
-            .frame(width: 1, height: 138)
+            .frame(width: 1, height: model.tile.dividerHeight)
             .padding(.horizontal, 8.5) // keeps the ~18pt tile gap
     }
 
@@ -919,7 +963,8 @@ struct SwitcherView: View {
             + MenuMetrics.appCellTop(pos: cellPos, extraRows: extraRows) + height
         let x = MenuMetrics.submenuXOffset(pos: model.highlight,
                                            tiles: model.filtered.count,
-                                           stageWidth: NSScreen.main?.visibleFrame.width ?? 0)
+                                           stageWidth: NSScreen.main?.visibleFrame.width ?? 0,
+                                           tile: model.tile)
         return submenuContent(app: app, profiles: profiles,
                               accent: model.menuFor?.accentColor ?? .secondary)
             .font(.system(size: 13))
@@ -1153,6 +1198,7 @@ struct SwitcherView: View {
 
 struct SwitcherTile: View {
     let item: SpaceItem
+    let metrics: TileMetrics
     let preview: NSImage?
     let isCurrent: Bool
     let isHighlighted: Bool
@@ -1161,7 +1207,7 @@ struct SwitcherTile: View {
 
     @State private var hovering = false
 
-    private static let thumbSize = TileMetrics.thumb
+    private var thumbSize: CGSize { metrics.thumb }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -1180,7 +1226,7 @@ struct SwitcherTile: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(maxWidth: Self.thumbSize.width)
+            .frame(maxWidth: thumbSize.width)
         }
         .padding(.horizontal, TileMetrics.hPadding)
         .padding(.top, 10)
@@ -1218,8 +1264,7 @@ struct SwitcherTile: View {
     /// shadow keeps it readable over light screenshot content.
     private var centerBadge: some View {
         Text("\(item.number)")
-            // 107pt ≈ 77pt cap height: ~68% of the 113pt preview.
-            .font(.system(size: 107, weight: .heavy, design: .default))
+            .font(.system(size: metrics.numeralSize, weight: .heavy, design: .default))
             .foregroundStyle(isCurrent ? item.accentColor.opacity(0.75) : Color.white.opacity(0.42))
             .shadow(color: .black.opacity(0.55), radius: 1, y: 1)
     }
@@ -1230,7 +1275,7 @@ struct SwitcherTile: View {
             Image(nsImage: preview)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
+                .frame(width: thumbSize.width, height: thumbSize.height)
                 .overlay(Color.black.opacity(0.35)) // dim scrim so the numeral pops
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay(RoundedRectangle(cornerRadius: 4)
@@ -1240,7 +1285,7 @@ struct SwitcherTile: View {
             // The centered number badge overlays this; tint alone suffices.
             RoundedRectangle(cornerRadius: 4)
                 .fill(item.accentColor.opacity(0.10))
-                .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
+                .frame(width: thumbSize.width, height: thumbSize.height)
         }
     }
 }
