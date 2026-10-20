@@ -266,6 +266,10 @@ final class WindowMover {
         /// CGWindowIDs that matched the window before the move; whether any
         /// is on screen afterwards is the "did it travel" answer.
         let trackedIDs: [CGWindowID]
+        /// The window's origin before any press, read the way the
+        /// engagement check reads it (`currentOrigin`). Movement is measured
+        /// from here, never from the captured AX frame.
+        let baseline: CGPoint
         let startedAt: DispatchTime
         var candidateIndex = 0
         var stage = Stage.pressing
@@ -322,10 +326,15 @@ final class WindowMover {
             Log.mover.notice("prepared: \(candidates.count, privacy: .public) grab candidate(s) \(grabMs, privacy: .public)ms, switcher off screen \(clear ? "yes" : "NO", privacy: .public) after \(clearMs, privacy: .public)ms")
             // Only meaningful once the switcher is gone — it would be on top.
             var tracked: [CGWindowID] = []
+            var baseline: CGPoint?
             if clear {
                 Self.logTopmostWindow(at: candidates[0].point, for: window)
                 tracked = Self.matchingWindowIDs(for: window)
-                Log.mover.notice("tracking \(window.appName, privacy: .public) window id(s) [\(tracked.map(String.init).joined(separator: ", "), privacy: .public)] matching the captured frame")
+                // From the same source the engagement reads will use: the
+                // captured AX frame can differ from WindowServer's by the
+                // 2pt `matches` allows, which would read as a drag.
+                baseline = Self.currentOrigin(of: window, tracked: tracked)?.origin
+                Log.mover.notice("tracking \(window.appName, privacy: .public) window id(s) [\(tracked.map(String.init).joined(separator: ", "), privacy: .public)] matching the captured frame, baseline \(baseline?.logDescription ?? "unreadable", privacy: .public)")
             }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -335,13 +344,13 @@ final class WindowMover {
                     return
                 }
                 self.arm(window, candidates: candidates, previous: previous ?? candidates[0].point,
-                         uuid: uuid, index: index, tracked: tracked)
+                         uuid: uuid, index: index, tracked: tracked, baseline: baseline)
             }
         }
     }
 
     private func arm(_ window: MovableWindow, candidates: [Candidate], previous: CGPoint,
-                     uuid: String, index: Int, tracked: [CGWindowID]) {
+                     uuid: String, index: Int, tracked: [CGWindowID], baseline: CGPoint?) {
         let source = CGEventSource(stateID: .hidSystemState)
         // Warping otherwise suppresses local (real) mouse input for 0.25s —
         // exactly the window in which we post the drag and the user may be
@@ -350,6 +359,7 @@ final class WindowMover {
 
         inFlight = Move(uuid: uuid, index: index, window: window, candidates: candidates,
                         restoreCursor: previous, source: source, trackedIDs: tracked,
+                        baseline: baseline ?? window.frame.origin,
                         startedAt: DispatchTime.now())
         pressCurrentCandidate()
     }
@@ -437,7 +447,7 @@ final class WindowMover {
 
     private func engagementRead(_ token: Int, origin: CGPoint?, source: String?) {
         guard var pending = inFlight, isEngaging(token) else { return }
-        let was = pending.window.frame.origin
+        let was = pending.baseline
         let grab = pending.candidate.point.logDescription
 
         if let origin {
@@ -576,7 +586,7 @@ final class WindowMover {
         // Where the window actually ended up — diagnostic, except that an
         // aborted move puts the window back if a nudge shifted it (a drag
         // can start just as a candidate is given up). Off main: it's AX.
-        let tracked = pending.trackedIDs
+        let tracked = pending.trackedIDs, baseline = pending.baseline
         AX.queue.asyncAfter(deadline: .now() + 0.2) {
             let windows = AX.windowCount(AX.app(window.pid))
             let onScreen = Set(Self.layerZeroWindows().map(\.number))
@@ -586,7 +596,8 @@ final class WindowMover {
             let answer = tracked.isEmpty ? "unknown (no window id tracked)"
                 : tracked.contains(where: onScreen.contains) ? "yes" : "no"
             var landed = Self.currentOrigin(of: window, tracked: tracked)?.origin
-            if failed, let at = landed, at != window.frame.origin {
+            if failed, let at = landed, at != baseline {
+                // Set through AX, so restore the AX-captured origin.
                 var origin = window.frame.origin
                 if let value = AXValueCreate(.cgPoint, &origin) {
                     AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, value)
