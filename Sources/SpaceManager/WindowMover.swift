@@ -182,9 +182,11 @@ private final class HeldButton {
 /// A mouse-down doesn't always start a window drag (on Chrome a hit on a tab
 /// just selects the tab), and switching without the window strands the user
 /// on the destination. So each grab candidate is verified before the switch:
-/// press, nudge, and read the window's AX position back — a window in a
-/// native drag has moved by the nudge. No movement means release and try the
-/// next candidate; none engaging means abort without switching.
+/// press, nudge, and poll the window's position — a window in a native drag
+/// follows the nudge. The position comes from WindowServer (CGWindowList),
+/// not AX: an app's AX position lags its real one by 100–250ms. No movement
+/// within `engageWindow` means release and try the next candidate; none
+/// engaging means abort without switching.
 final class WindowMover {
     /// Injected so a move goes through the app's single switching gate
     /// (setup recheck + keystroke). false = the keystroke never went out.
@@ -199,28 +201,37 @@ final class WindowMover {
     /// check usually finishes inside it; the switch waits out the remainder.
     private static let switchDelay: TimeInterval = 0.12
     private static let settleDelay: TimeInterval = 0.15
-    /// After the nudge, how long before reading the window's position back —
-    /// and the gap before the one re-read (windows can lag a frame).
-    private static let engageDelay: TimeInterval = 0.05
+    /// How far each drag event travels from the grab point, in order. Some
+    /// apps (Messages) don't start a window drag until the cursor has moved
+    /// more than 3pt; the small first step keeps the window from visibly
+    /// jumping in apps that start at once (Slack, Chrome).
+    private static let nudges: [CGFloat] = [3, 8]
+    /// After the first nudge, the gap before each further one while the
+    /// window still hasn't moved.
+    private static let nudgeInterval: TimeInterval = 0.04
+    /// Between reads of the window's position during the engagement check.
+    private static let pollInterval: TimeInterval = 0.015
+    /// How long after the first nudge to keep looking before calling the
+    /// candidate dead. Measured 2026-10-19: Slack's first move showed in
+    /// WindowServer 60–100ms after the nudge (AX lagged to ~260ms).
+    private static let engageWindow: TimeInterval = 0.2
     /// Between releasing a candidate that didn't engage and pressing the next.
     private static let interPressGap: TimeInterval = 0.03
-    /// Nominal cost of one candidate that doesn't engage: nudge, two reads,
-    /// the gap (≈0.19s), plus allowance for the AX round trips.
+    /// Nominal cost of one candidate that doesn't engage: the wait before
+    /// the first nudge, the engagement window and the gap (≈0.29s), plus
+    /// allowance for the reads.
     private static let perCandidateCost: TimeInterval =
-        dragDelay + 2 * engageDelay + interPressGap + 0.03
-    /// Ceiling on the whole retry phase. With `maxCandidates` × ~0.22s the
-    /// nominal worst case is ~1.3s; the budget also stops retrying if slow AX
+        dragDelay + engageWindow + interPressGap + 0.03
+    /// Ceiling on the whole retry phase. With `maxCandidates` × ~0.32s the
+    /// nominal worst case is ~1.9s; the budget also stops retrying if slow AX
     /// reads (0.5s timeout each) eat the time instead.
-    private static let retryBudget: TimeInterval = 1.5
+    private static let retryBudget: TimeInterval = 2.0
     private static let maxCandidates = 6
     /// Hard ceiling on holding the button down when arrival never comes.
     /// Restarted on each press, so it bounds every individual hold.
     private static let bailout: TimeInterval = 2.5
     /// Off-main backstop for `bailout`, in case main is what's stuck.
     private static let buttonCeiling: TimeInterval = 3.5
-    /// How far the drag event travels — enough to enter drag mode, small
-    /// enough that the window doesn't visibly jump.
-    private static let dragDistance: CGFloat = 3
     /// How long to wait for our own windows (the switcher) to actually leave
     /// the screen before the mouse-down. orderOut returns before WindowServer
     /// has taken the window away; a mouse-down in that gap lands on the
@@ -264,6 +275,13 @@ final class WindowMover {
         /// step checks it to know it still belongs to the current candidate.
         var token = 0
         var pressedAt = DispatchTime.now()
+        /// How many of `nudges` the current candidate has posted, and when
+        /// the first went out.
+        var nudged = 0
+        var firstNudgeAt = DispatchTime.now()
+        /// Whether any engagement read for the current candidate returned a
+        /// position at all.
+        var readable = false
         var bail: DispatchWorkItem?
 
         var candidate: Candidate { candidates[candidateIndex] }
@@ -336,15 +354,17 @@ final class WindowMover {
         pressCurrentCandidate()
     }
 
-    /// Warp, mouse-down and (after `dragDelay`) nudge at the current
-    /// candidate, then hand off to the engagement check.
+    /// Warp, mouse-down and (after `dragDelay`) the first nudge at the
+    /// current candidate, then hand off to the engagement check.
     private func pressCurrentCandidate() {
         guard var pending = inFlight, pending.stage == .pressing else { return }
         let candidate = pending.candidate
         let grab = candidate.point
-        let release = CGPoint(x: grab.x + Self.dragDistance, y: grab.y)
+        // The watchdog's release point: where the last nudge would leave the
+        // cursor. Normal exits release wherever the drag actually got to.
+        let farthest = CGPoint(x: grab.x + Self.nudges[Self.nudges.count - 1], y: grab.y)
         CGWarpMouseCursorPosition(grab)
-        guard let token = button.press(at: grab, releaseAt: release, source: pending.source,
+        guard let token = button.press(at: grab, releaseAt: farthest, source: pending.source,
                                        ceiling: Self.buttonCeiling) else {
             if pending.token == 0 {
                 // Nothing was ever pressed: nothing to finish.
@@ -359,8 +379,10 @@ final class WindowMover {
         }
 
         pending.token = token
-        pending.release = release
+        pending.release = grab
         pending.pressedAt = DispatchTime.now()
+        pending.nudged = 0
+        pending.readable = false
         pending.stage = .engaging
         pending.bail?.cancel()
         let bail = DispatchWorkItem { [weak self] in
@@ -372,14 +394,12 @@ final class WindowMover {
         Log.mover.notice("armed \(pending.window.appName, privacy: .public) pid=\(pending.window.pid, privacy: .public) grab=\(grab.logDescription, privacy: .public) candidate \(pending.candidateIndex + 1, privacy: .public)/\(pending.candidates.count, privacy: .public) tier=\(candidate.tier, privacy: .public) role=\(candidate.role, privacy: .public) dest=\(pending.uuid, privacy: .public) index=\(pending.index, privacy: .public)")
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.bailout, execute: bail)
 
-        let source = pending.source
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragDelay) { [weak self] in
             guard let self, self.isEngaging(token), self.button.isHeld(token) else { return }
-            CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged,
-                    mouseCursorPosition: release, mouseButton: .left)?
-                .post(tap: .cghidEventTap)
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.engageDelay) { [weak self] in
-                self?.checkEngaged(token, attempt: 1)
+            self.postNudge(token)
+            self.inFlight?.firstNudgeAt = DispatchTime.now()
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pollInterval) { [weak self] in
+                self?.checkEngaged(token)
             }
         }
     }
@@ -388,47 +408,81 @@ final class WindowMover {
         inFlight?.token == token && inFlight?.stage == .engaging
     }
 
-    /// Reads the window's position on `AX.queue` and compares it to the
-    /// captured frame: a native drag has moved it by the nudge.
-    private func checkEngaged(_ token: Int, attempt: Int) {
+    /// Posts the next of `nudges` as a drag event; the release point follows.
+    private func postNudge(_ token: Int) {
+        guard var pending = inFlight, isEngaging(token), button.isHeld(token),
+              pending.nudged < Self.nudges.count else { return }
+        let grab = pending.candidate.point
+        let to = CGPoint(x: grab.x + Self.nudges[pending.nudged], y: grab.y)
+        CGEvent(mouseEventSource: pending.source, mouseType: .leftMouseDragged,
+                mouseCursorPosition: to, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        pending.nudged += 1
+        pending.release = to
+        inFlight = pending
+    }
+
+    /// Reads the window's position off main and compares it to the captured
+    /// frame: a native drag has moved it with the nudge.
+    private func checkEngaged(_ token: Int) {
         guard let pending = inFlight, isEngaging(token) else { return }
-        let element = pending.window.element
+        let window = pending.window, tracked = pending.trackedIDs
         AX.queue.async { [weak self] in
-            let now = AX.frame(of: element)
+            let read = Self.currentOrigin(of: window, tracked: tracked)
             DispatchQueue.main.async {
-                self?.engagementRead(token, attempt: attempt, frame: now)
+                self?.engagementRead(token, origin: read?.origin, source: read?.source)
             }
         }
     }
 
-    private func engagementRead(_ token: Int, attempt: Int, frame: CGRect?) {
-        guard let pending = inFlight, isEngaging(token) else { return }
+    private func engagementRead(_ token: Int, origin: CGPoint?, source: String?) {
+        guard var pending = inFlight, isEngaging(token) else { return }
         let was = pending.window.frame.origin
-        let ms = AX.ms(since: pending.pressedAt)
         let grab = pending.candidate.point.logDescription
 
-        if let frame {
-            let dx = frame.origin.x - was.x, dy = frame.origin.y - was.y
+        if let origin {
+            pending.readable = true
+            inFlight = pending
+            let dx = origin.x - was.x, dy = origin.y - was.y
             if abs(dx) >= 1 || abs(dy) >= 1 {
-                Log.mover.notice("drag engaged at \(grab, privacy: .public) after \(ms, privacy: .public)ms (window moved \(String(format: "%+.0f, %+.0f", dx, dy), privacy: .public), read \(attempt, privacy: .public))")
+                Log.mover.notice("drag engaged at \(grab, privacy: .public) after \(AX.ms(since: pending.pressedAt), privacy: .public)ms (window moved \(String(format: "%+.0f, %+.0f", dx, dy), privacy: .public) per \(source ?? "?", privacy: .public), nudge \(pending.nudged, privacy: .public)/\(Self.nudges.count, privacy: .public))")
                 requestSwitch(token)
                 return
             }
         }
-        if attempt == 1 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.engageDelay) { [weak self] in
-                self?.checkEngaged(token, attempt: 2)
+        let sinceNudge = TimeInterval(AX.ms(since: pending.firstNudgeAt)) / 1000
+        if sinceNudge >= Self.engageWindow {
+            guard pending.readable else {
+                // Can't tell either way (window gone from WindowServer's list
+                // and the app not answering AX). Switching is what the move
+                // did before this check existed, so fall back to that.
+                Log.mover.error("drag engagement unverifiable at \(grab, privacy: .public), window position unreadable; switching anyway")
+                requestSwitch(token)
+                return
             }
+            tryNextCandidate()
             return
         }
-        guard frame != nil else {
-            // Can't tell either way (app not answering AX). Switching is what
-            // the move did before this check existed, so fall back to that.
-            Log.mover.error("drag engagement unverifiable at \(grab, privacy: .public), window frame unreadable; switching anyway")
-            requestSwitch(token)
-            return
+        if pending.nudged < Self.nudges.count,
+           sinceNudge >= Self.nudgeInterval * Double(pending.nudged) {
+            postNudge(token)
         }
-        tryNextCandidate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pollInterval) { [weak self] in
+            self?.checkEngaged(token)
+        }
+    }
+
+    /// The window's current origin and where it was read from. WindowServer
+    /// first: it reflects a drag within ~20ms, where the app's AX position
+    /// lags 100–250ms. AX only when no window id was tracked (or it's
+    /// gone). Runs on `AX.queue`.
+    private static func currentOrigin(of window: MovableWindow,
+                                      tracked: [CGWindowID]) -> (origin: CGPoint, source: String)? {
+        if !tracked.isEmpty,
+           let match = layerZeroWindows().first(where: { tracked.contains($0.number) }) {
+            return (match.bounds.origin, "WindowServer")
+        }
+        return AX.frame(of: window.element).map { ($0.origin, "AX") }
     }
 
     /// Switches once the drag has been held at least `switchDelay`.
@@ -519,16 +573,28 @@ final class WindowMover {
             Log.mover.notice("\(reason, privacy: .public)\(note, privacy: .public); \(under, privacy: .public) on-screen \(window.appName, privacy: .public) window(s) under the release point")
         }
 
-        // Diagnostic only — where the window actually ended up. Nothing acts
-        // on this; the move is best-effort by design. Off main: it's AX.
+        // Where the window actually ended up — diagnostic, except that an
+        // aborted move puts the window back if a nudge shifted it (a drag
+        // can start just as a candidate is given up). Off main: it's AX.
         let tracked = pending.trackedIDs
         AX.queue.asyncAfter(deadline: .now() + 0.2) {
-            let landed = AX.frame(of: window.element)
             let windows = AX.windowCount(AX.app(window.pid))
             let onScreen = Set(Self.layerZeroWindows().map(\.number))
-            let traveled = tracked.isEmpty ? "unknown (no window id tracked)"
+            // On screen after an arrival means it came along; after an abort
+            // it means it stayed put, as it should.
+            let question = failed ? "still on this space" : "traveled"
+            let answer = tracked.isEmpty ? "unknown (no window id tracked)"
                 : tracked.contains(where: onScreen.contains) ? "yes" : "no"
-            Log.mover.notice("\(window.appName, privacy: .public) window now at \(landed?.logDescription ?? "unreadable", privacy: .public) (was \(window.frame.logDescription, privacy: .public)); traveled: \(traveled, privacy: .public); app AX window count \(windows.map(String.init) ?? "?", privacy: .public)")
+            var landed = Self.currentOrigin(of: window, tracked: tracked)?.origin
+            if failed, let at = landed, at != window.frame.origin {
+                var origin = window.frame.origin
+                if let value = AXValueCreate(.cgPoint, &origin) {
+                    AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, value)
+                }
+                Log.mover.notice("put \(window.appName, privacy: .public) window back from \(at.logDescription, privacy: .public)")
+                landed = origin
+            }
+            Log.mover.notice("\(window.appName, privacy: .public) window now at \(landed?.logDescription ?? "unreadable", privacy: .public) (was \(window.frame.origin.logDescription, privacy: .public)); \(question, privacy: .public): \(answer, privacy: .public); app AX window count \(windows.map(String.init) ?? "?", privacy: .public)")
         }
     }
 
