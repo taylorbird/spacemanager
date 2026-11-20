@@ -9,7 +9,8 @@ struct QuickLaunchApp: Codable, Identifiable, Equatable {
     var id = UUID()
     var label = ""
     var bundleID = ""
-    /// Single letter, lowercased; fires with ⌘ held.
+    /// Single letter, lowercased; fires with ⌘ held, or bare while the
+    /// tile menu is open.
     var keyEquivalent = ""
     /// Virtual key that opens a new window in this app, pressed with ⌘.
     /// Optional (nil = ⌘N) so entries persisted before this field existed

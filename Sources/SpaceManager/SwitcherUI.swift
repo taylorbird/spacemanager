@@ -667,7 +667,25 @@ final class SwitcherController {
             case 124:
                 Log.switcher.notice("Right in menu, selection \(self.model.menuSelection, privacy: .public) item \(selected?.id ?? "none", privacy: .public) bundle \(selected?.launchApp?.bundleID ?? "-", privacy: .public): submenu unavailable")
                 model.closeMenu()
-            default: model.closeMenu()
+            default:
+                // Bare letters act inside the open menu (it has no filter to
+                // type into): M moves the captured window here when that row
+                // is showing, then an assigned letter launches its app.
+                // Anything else keeps its old job below.
+                if event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                   let chars = event.charactersIgnoringModifiers, chars.count == 1,
+                   let c = chars.first, c.isLetter {
+                    if c.lowercased() == "m",
+                       let move = items.first(where: { $0.movableWindow != nil }) {
+                        activate(move)
+                        return true
+                    }
+                    if let app = model.quickLaunchApp(matching: c) {
+                        activate(.launch(app))
+                        return true
+                    }
+                }
+                model.closeMenu()
             }
         }
 
@@ -1066,6 +1084,9 @@ struct SwitcherView: View {
                     Text("Move window here")
                         .help("Move the \(window.appName) window to this space")
                     Spacer(minLength: 0)
+                    Text("m")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 11)
                 .frame(height: MenuMetrics.rowHeight)
@@ -1110,6 +1131,16 @@ struct SwitcherView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: MenuMetrics.appCellHeight)
+                    .overlay(alignment: .leading) {
+                        // The bare key that launches this app from the open
+                        // menu; same treatment as the move row's "M".
+                        if !app.keyEquivalent.isEmpty {
+                            Text(app.keyEquivalent.lowercased())
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 11)
+                        }
+                    }
                     .overlay(alignment: .trailing) {
                         if model.profileSubmenuAvailable(for: .launch(app)) {
                             Image(systemName: "chevron.right")

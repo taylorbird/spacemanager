@@ -161,7 +161,8 @@ struct QuickLaunchRow: View {
                     Image(nsImage: icon).resizable().frame(width: 20, height: 20)
                 }
                 Text(app.label)
-                Text("⌘").foregroundStyle(.secondary)
+                Text("Key").foregroundStyle(.secondary)
+                    .help("⌘ + key on a highlighted tile; just the key while its menu is open")
                 TextField("", text: Binding(
                     get: { app.keyEquivalent.uppercased() },
                     set: { app.keyEquivalent = String($0.lowercased().suffix(1)) }
