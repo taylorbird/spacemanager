@@ -1,4 +1,5 @@
-## 0.1.4
+## 0.1.5
 
-- **Moving a window to another space works in more apps**: in some apps (Messages, Slack and others) "Move window here" would wiggle the cursor at the top of the window and then give up. It now starts the drag reliably and carries the window with you.
-- **Failed moves leave the window where it was**: if a move can't start, the window stays put instead of shifting a few points.
+- **Moving Chrome windows works again**: after a recent Chrome update, "Move window here" would wiggle the cursor along the tab strip and give up. It now grabs Chrome where it still accepts a window drag and carries the window with you.
+- **Single-key shortcuts in the tile menu**: with a tile's menu open (↓), press an app's assigned key to open it on that space, or **m** to move the current window there. Assign keys in Preferences; each shows as a small hint in the menu.
+- **Tidier tile menu**: "Move window here" no longer wraps onto two lines.
