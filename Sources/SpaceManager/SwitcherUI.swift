@@ -65,7 +65,8 @@ struct TileMetrics: Equatable {
 /// is known before layout — that's what lets it be offset clear of the panel
 /// without measuring anything, and it never resizes with its content.
 enum MenuMetrics {
-    static let width: CGFloat = 220
+    /// Fits "Move window here" plus its "m" hint on one line.
+    static let width: CGFloat = 240
     static let rowHeight: CGFloat = 40
     static let inset: CGFloat = 7
     /// Breathing room between the panel's bottom edge and the card's top.
@@ -1082,6 +1083,7 @@ struct SwitcherView: View {
                             .frame(width: 24, height: 24)
                     }
                     Text("Move window here")
+                        .lineLimit(1)
                         .help("Move the \(window.appName) window to this space")
                     Spacer(minLength: 0)
                     Text("m")
