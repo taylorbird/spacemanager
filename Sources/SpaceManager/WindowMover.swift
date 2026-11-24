@@ -206,6 +206,17 @@ final class WindowMover {
     /// more than 3pt; the small first step keeps the window from visibly
     /// jumping in apps that start at once (Slack, Chrome).
     private static let nudges: [CGFloat] = [3, 8]
+    /// Chrome 157 (macOS 27.2.1, probed 2026-11-23) only starts a window drag
+    /// from the top ~5pt of its tab strip, and only after the cursor has
+    /// traveled past 8pt: +3,+8 moved it 0/3 times, +3…+30 moved it 3/3.
+    private static let chromeNudges: [CGFloat] = [3, 8, 16, 30]
+    private static let chromeGrabInset: CGFloat = 4
+    private static let defaultGrabInset: CGFloat = 12
+
+    static func isChrome(_ pid: pid_t) -> Bool {
+        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier?
+            .hasPrefix("com.google.Chrome") == true
+    }
     /// After the first nudge, the gap before each further one while the
     /// window still hasn't moved.
     private static let nudgeInterval: TimeInterval = 0.04
@@ -271,6 +282,11 @@ final class WindowMover {
         /// from here, never from the captured AX frame.
         let baseline: CGPoint
         let startedAt: DispatchTime
+        /// Drag steps for this app (`nudges`, or `chromeNudges`).
+        let nudges: [CGFloat]
+        /// How long after the first nudge to keep looking: `engageWindow`,
+        /// stretched so the last nudge still gets the full window.
+        let engageWindow: TimeInterval
         var candidateIndex = 0
         var stage = Stage.pressing
         /// Where the drag left the cursor; the mouse-up posts here too.
@@ -357,10 +373,15 @@ final class WindowMover {
         // moving the mouse.
         source?.localEventsSuppressionInterval = 0
 
+        let nudges = Self.isChrome(window.pid) ? Self.chromeNudges : Self.nudges
+        // Other apps keep the original window; Chrome's extra nudges each
+        // get the time they need.
+        let engage = nudges == Self.nudges ? Self.engageWindow
+            : Self.nudgeInterval * Double(nudges.count - 1) + Self.engageWindow
         inFlight = Move(uuid: uuid, index: index, window: window, candidates: candidates,
                         restoreCursor: previous, source: source, trackedIDs: tracked,
                         baseline: baseline ?? window.frame.origin,
-                        startedAt: DispatchTime.now())
+                        startedAt: DispatchTime.now(), nudges: nudges, engageWindow: engage)
         pressCurrentCandidate()
     }
 
@@ -372,7 +393,7 @@ final class WindowMover {
         let grab = candidate.point
         // The watchdog's release point: where the last nudge would leave the
         // cursor. Normal exits release wherever the drag actually got to.
-        let farthest = CGPoint(x: grab.x + Self.nudges[Self.nudges.count - 1], y: grab.y)
+        let farthest = CGPoint(x: grab.x + pending.nudges[pending.nudges.count - 1], y: grab.y)
         CGWarpMouseCursorPosition(grab)
         guard let token = button.press(at: grab, releaseAt: farthest, source: pending.source,
                                        ceiling: Self.buttonCeiling) else {
@@ -421,12 +442,18 @@ final class WindowMover {
     /// Posts the next of `nudges` as a drag event; the release point follows.
     private func postNudge(_ token: Int) {
         guard var pending = inFlight, isEngaging(token), button.isHeld(token),
-              pending.nudged < Self.nudges.count else { return }
+              pending.nudged < pending.nudges.count else { return }
         let grab = pending.candidate.point
-        let to = CGPoint(x: grab.x + Self.nudges[pending.nudged], y: grab.y)
-        CGEvent(mouseEventSource: pending.source, mouseType: .leftMouseDragged,
-                mouseCursorPosition: to, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
+        let to = CGPoint(x: grab.x + pending.nudges[pending.nudged], y: grab.y)
+        let from = pending.nudged == 0 ? grab : pending.release
+        if let drag = CGEvent(mouseEventSource: pending.source, mouseType: .leftMouseDragged,
+                              mouseCursorPosition: to, mouseButton: .left) {
+            // Real drags carry the step in the delta fields; the Chrome probe
+            // that engaged had them set.
+            drag.setIntegerValueField(.mouseEventDeltaX, value: Int64(to.x - from.x))
+            drag.setIntegerValueField(.mouseEventDeltaY, value: Int64(to.y - from.y))
+            drag.post(tap: .cghidEventTap)
+        }
         pending.nudged += 1
         pending.release = to
         inFlight = pending
@@ -455,13 +482,13 @@ final class WindowMover {
             inFlight = pending
             let dx = origin.x - was.x, dy = origin.y - was.y
             if abs(dx) >= 1 || abs(dy) >= 1 {
-                Log.mover.notice("drag engaged at \(grab, privacy: .public) after \(AX.ms(since: pending.pressedAt), privacy: .public)ms (window moved \(String(format: "%+.0f, %+.0f", dx, dy), privacy: .public) per \(source ?? "?", privacy: .public), nudge \(pending.nudged, privacy: .public)/\(Self.nudges.count, privacy: .public))")
+                Log.mover.notice("drag engaged at \(grab, privacy: .public) after \(AX.ms(since: pending.pressedAt), privacy: .public)ms (window moved \(String(format: "%+.0f, %+.0f", dx, dy), privacy: .public) per \(source ?? "?", privacy: .public), nudge \(pending.nudged, privacy: .public)/\(pending.nudges.count, privacy: .public))")
                 requestSwitch(token)
                 return
             }
         }
         let sinceNudge = TimeInterval(AX.ms(since: pending.firstNudgeAt)) / 1000
-        if sinceNudge >= Self.engageWindow {
+        if sinceNudge >= pending.engageWindow {
             guard pending.readable else {
                 // Can't tell either way (window gone from WindowServer's list
                 // and the app not answering AX). Switching is what the move
@@ -473,7 +500,7 @@ final class WindowMover {
             tryNextCandidate()
             return
         }
-        if pending.nudged < Self.nudges.count,
+        if pending.nudged < pending.nudges.count,
            sinceNudge >= Self.nudgeInterval * Double(pending.nudged) {
             postNudge(token)
         }
@@ -618,7 +645,9 @@ final class WindowMover {
     /// on `AX.queue`.
     private static func grabCandidates(for window: MovableWindow) -> [Candidate] {
         let f = window.frame
-        let y = f.minY + 12
+        // Chrome only drags from the top ~5pt of its tab strip (see
+        // `chromeNudges`); from +6pt down it swallows a synthesized drag.
+        let y = f.minY + (isChrome(window.pid) ? chromeGrabInset : defaultGrabInset)
         let xs = [f.midX, f.maxX - 160, f.maxX - 220, f.minX + 96, f.maxX - 28,
                   f.midX - 200, f.midX + 200]
         // Clamp into the window, and keep candidates well apart: two clicks
